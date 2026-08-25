@@ -1,0 +1,14 @@
+dist
+cache
+.cache
+coverage
+node_modules
+
+.eslintcache
+.changeset/README.md
+*.tsbuildinfo
+
+.idea
+.vscode/**/*
+!.vscode/settings.json
+!.vscode/extensions.json

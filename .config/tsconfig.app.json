@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "paths": {
+      "@/*": ["../src/*"]
+    },
+    "resolveJsonModule": true,
+    "rootDir": "..",
+    "target": "ESNext",
+    "types": []
+  },
+  "extends": "@qingshaner/devtools/tsconfig/base.json",
+  "include": ["../src", "../test"]
+}

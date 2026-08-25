@@ -1,0 +1,66 @@
+{
+  "name": "template",
+  "type": "module",
+  "version": "0.0.0",
+  "packageManager": "pnpm@11.0.6",
+  "description": "a lib template for typescript",
+  "author": {
+    "name": "qingshaner",
+    "url": "https://github.com/Jon-a-than"
+  },
+  "license": "ISC",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "changeset-version": "changeset version",
+    "changeset-publish": "changeset publish",
+    "check": "biome check . --write",
+    "check:cspell": "cspell . --no-summary --no-progress --gitignore",
+    "check:type": "tsc --noEmit",
+    "check:knip": "knip",
+    "prepare": "simple-git-hooks",
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.10",
+    "@changesets/cli": "^2.31.1",
+    "@qingshaner/devtools": "^0.0.3",
+    "@types/node": "^26.3.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "cspell": "^10.1.1",
+    "knip": "^6.32.2",
+    "nano-staged": "^1.0.2",
+    "simple-git-hooks": "^2.13.1",
+    "tsdown": "^0.22.14",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm nano-staged",
+    "pre-push": "pnpm run --parallel '/(test|check|check:cspell|check:type|check:knip)/'"
+  },
+  "nano-staged": {
+    "*": "pnpm cspell --no-summary --no-progress --no-must-find-files --file-list",
+    "*.{json,jsonc,js,jsx,cjs,mjs,ts,tsx,cts,mts,html,svg,css,vue}": "pnpm biome check --fix --files-ignore-unknown=true --no-errors-on-unmatched"
+  }
+}

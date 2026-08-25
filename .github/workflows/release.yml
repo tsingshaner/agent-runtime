@@ -1,0 +1,67 @@
+name: release
+
+on:
+  push:
+    branches: ['main']
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: ['26']
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm i --frozen-lockfile
+      - name: Unit Test
+        run: pnpm test
+
+      - name: Build app
+        run: pnpm build
+
+      - name: Create Release Pull Request
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          commit: 'chore(release): update release & CHANGELOG.md'
+          title: '📦 Update Packages Version'
+          publish: pnpm changeset-publish
+          version: |
+            pnpm changeset-version
+            NPM_PACKAGE_VERSION=$(jq -r '.version' package.json)
+            sed -i -E "s/\"version\": \"[^\"]+\"/\"version\": \"${NPM_PACKAGE_VERSION}\"/" jsr.json
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to JSR
+        if: steps.changesets.outputs.published == 'true'
+        run: pnpm dlx jsr publish
+
+      - name: CNPM sync the latest published package
+        if: steps.changesets.outputs.published == 'true'
+        run: |
+          NPM_PACKAGE_NAME=$(echo '${{ steps.changesets.outputs.publishedPackages }}' | jq -r '.[0].name')
+          echo "Syncing CNPM $NPM_PACKAGE_NAME"
+          curl -X PUT "https://registry-direct.npmmirror.com/-/package/${NPM_PACKAGE_NAME}/syncs"

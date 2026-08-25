@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json
+
+import: '@qingshaner/devtools/cspell'
+
+ignorePaths:
+  - .gitignore
+  - package-lock.json
+  - pnpm-lock.yaml
+  - yarn.lock
+  - bun.lockb
+  - bun.lock
+  - bun.lock.json
+  - bun.lock.yaml
+  - bun.lock.json

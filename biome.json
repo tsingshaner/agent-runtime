@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": ["@qingshaner/devtools/biome"],
+  "overrides": [
+    {
+      "assist": {
+        "enabled": false
+      },
+      "includes": ["package.json"]
+    }
+  ]
+}

@@ -37,6 +37,35 @@ async function tryAcquireDirectory(dataDir: string): Promise<{ error: unknown } 
 }
 
 describe('SessionStore ownership', () => {
+  test('preserves the native mapping after reopening', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'runtime-store-'))
+    let store = await SessionStore.open(dir)
+
+    try {
+      await store.insertSession({
+        cwd: dir,
+        id: 's1',
+        nativeSessionId: 'native-1',
+        options: { model: 'test-model' },
+        projectId: 'p1',
+        runtime: 'codex',
+        title: 'first'
+      })
+      await store.close()
+      store = await SessionStore.open(dir)
+
+      await expect(store.getSession('s1')).resolves.toMatchObject({
+        activeRunId: null,
+        id: 's1',
+        nativeSessionId: 'native-1',
+        options: { model: 'test-model' }
+      })
+    } finally {
+      await store.close()
+      await rm(dir, { force: true, recursive: true })
+    }
+  })
+
   test('rejects a second owner until the first closes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'runtime-store-'))
     const first = await SessionStore.open(dir)

@@ -294,11 +294,8 @@ export class CodexRuntime implements RuntimeAdapter {
       }
       this.bind(run, turn.id)
       run.responseDone = true
-      if (turn.status !== 'inProgress' && !run.outcome) {
-        this.enqueue(run, {
-          bytes: 0,
-          frame: { kind: 'notification', method: 'turn/completed', params: { threadId: run.threadId, turn } }
-        })
+      if (turn.status !== 'inProgress') {
+        this.route(client, { kind: 'notification', method: 'turn/completed', params: { threadId: run.threadId, turn } })
       }
       this.pump(run)
     } catch (error) {

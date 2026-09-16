@@ -125,6 +125,13 @@ async function peer(requestTimeoutMs = 1000) {
     command,
     connections: () => connections,
     create,
+    exit: async () => {
+      // Observe real transport completion; socket close can precede its exit listener.
+      const client = Reflect.get(runtime, 'client') as object
+      const exited = Reflect.get(client, 'exited') as Promise<void>
+      await command({ action: 'exit' })
+      await exited
+    },
     handshake,
     request,
     runtime,
@@ -442,10 +449,41 @@ describe('CodexRuntime', () => {
     await p.send({ id: start.id, result: { turn: turn('turn') } })
     await entered.promise
     await p.send(done())
-    await p.command({ action: 'exit' })
-    await p.closed()
+    await p.exit()
     gate.resolve()
     expect(await execution).toEqual({ status: 'succeeded' })
+  })
+
+  test.each([
+    ['completed', { status: 'succeeded' }],
+    ['interrupted', { status: 'cancelled' }],
+    ['failed', { error: { code: 'RUN_FAILED', message: 'Codex turn failed' }, status: 'failed' }]
+  ])('preserves a terminal %s start response and queued output after transport exit', async (status, outcome) => {
+    const p = await peer()
+    const session = await p.create()
+    const gate = deferred()
+    const entered = deferred()
+    const notices: AdapterNotice[] = []
+    const execution = p.runtime.execute(session, input, async (notice) => {
+      notices.push(notice)
+      if (notice.kind === 'started') {
+        entered.resolve()
+        await gate.promise
+      }
+    })
+    const start = await p.request('turn/start')
+    await p.send(delta())
+    await entered.promise
+    await p.send({ id: start.id, result: { turn: turn('turn', status) } })
+    await p.exit()
+    gate.resolve()
+    expect(await execution).toEqual(outcome)
+    expect(notices).toEqual([
+      { kind: 'started', nativeTurnId: 'turn' },
+      { event: { messageId: 'run:message', role: 'assistant', type: 'TEXT_MESSAGE_START' }, kind: 'event' },
+      { event: { delta: 'hello', messageId: 'run:message', type: 'TEXT_MESSAGE_CONTENT' }, kind: 'event' },
+      { event: { messageId: 'run:message', type: 'TEXT_MESSAGE_END' }, kind: 'event' }
+    ])
   })
 
   test('fails mismatched early and response identities and closes the uncertain transport', async () => {

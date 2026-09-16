@@ -32,7 +32,7 @@ jobs:
         run: pnpm i --frozen-lockfile
 
       - name: Check
-        run: pnpm run --parallel '/^check/'
+        run: pnpm run '/^check/'
 
       - uses: autofix-ci/action@551dded8c6cc8a1054039c8bc0b8b48c51dfc6ef
         with:

@@ -1,6 +1,6 @@
 # 子项目一：Codex SDK 与统一会话管理
 
-状态：设计讨论已确认，书面 spec 待用户审阅。
+状态：用户已确认书面 spec（2026-09-16）；按后续要求采用 Drizzle 1.0.0-rc.4 与 Valibot，已同步实施计划。
 
 ## 1. 项目拆分与本次目标
 
@@ -106,7 +106,7 @@ PGlite 保存在调用方指定的本地 dataDir。一个数据目录只能由�
 - events：runId、递增 sequence、AG-UI JSON 事件；以 (runId, sequence) 唯一约束排序。
 - approvals：公共审批 ID、runId、原生请求标识、请求内容、允许决定、处理状态。
 
-schema 使用版本化 SQL 迁移和参数化查询，不新增 ORM。每条事件追加及其对应状态更新在同一事务提交；终态和最终事件原子落库。每个会话的活动运行约束同时受数据库唯一性约束保护。
+schema 使用 Drizzle ORM 1.0.0-rc.4 定义，配套 drizzle-kit 1.0.0-rc.4 生成并提交版本化 SQL 迁移；运行时使用 drizzle-orm/pglite 和配套 migrator。查询与事务通过 Drizzle 执行，需要 SQL 表达式时使用参数化 sql 标签，不插值拼接用户输入。每条事件追加及其对应状态更新在同一事务提交；终态和最终事件原子落库。每个会话的活动运行约束同时受数据库唯一性约束保护。
 
 运行创建、原生调用和数据库不能组成跨进程事务。先保存启动中的运行，再发起原生调用；失败记录到该运行。不自动重试结果不确定的创建或执行请求，避免重复工具副作用。原生会话创建成功但索引写入失败时报告失败，可能留下未管理的原生会话，不自动删除或扫描它。
 
@@ -152,7 +152,7 @@ dispose 停止接受新操作，尝试取消运行并等待有界退出，然后
 
 模型、工作目录和权限策略由调用方配置，不硬编码现有示例的模型。复用用户已完成的 Codex 登录态；不实现登录 UI、不修改全局配置文件。调用方可显式提供 Codex home；默认权限采用 workspace-write 与 on-request，拒绝未经调用方配置的权限升级。配置按受支持的原生类型校验，不接受任意 shell 拼接。
 
-Node.js 24 LTS、ESM、pnpm workspace。build/typecheck/test 必须覆盖实际包，而非仅根 src；保留用户正在进行的配置调整。AG-UI 使用官方类型和校验器，TanStack AI 客户端集成留在子项目二，不为名称一致在本次引入执行引擎。
+Node.js 24 LTS、ESM、pnpm workspace。数据访问使用 Drizzle 1.0.0-rc.4，应用侧校验使用 Valibot 1.5.0。build/typecheck/test 必须覆盖实际包，而非仅根 src；保留用户正在进行的配置调整。公共方法输入、游标、Codex 原生消息消费字段使用 Valibot 校验，并从 schema 推导输入类型；数据库行 schema 可复用 drizzle-orm/valibot。AG-UI 使用官方类型和校验器，不用 Valibot 重写官方事件 schema，TanStack AI 客户端集成留在子项目二，不为名称一致在本次引入执行引擎。
 
 ## 9. 验收
 
@@ -174,7 +174,8 @@ Node.js 24 LTS、ESM、pnpm workspace。build/typecheck/test 必须覆盖实际�
 ## 10. 参考与审阅门槛
 
 - [Codex app-server](https://developers.openai.com/codex/app-server/)：初始化、会话/轮次及服务端审批协议。
-- [PGlite](https://pglite.dev/docs/)：Node 文件系统持久化与参数化 SQL。
+- [PGlite](https://pglite.dev/docs/)：Node 文件系统持久化。
+- [Drizzle PGlite](https://orm.drizzle.team/docs/connect-pglite)、[Drizzle Valibot](https://orm.drizzle.team/docs/valibot)：数据库驱动与校验集成。
 - [AG-UI 事件](https://docs.ag-ui.com/concepts/events)：标准事件及 CUSTOM 扩展。
 
 本文件只定义首个子项目。用户确认书面 spec 后才使用 Superpowers writing-plans 生成实施计划，不在本轮实现代码。

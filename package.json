@@ -1,29 +1,17 @@
 {
-  "name": "template",
+  "name": "agent-runtime",
   "type": "module",
-  "version": "0.0.0",
-  "packageManager": "pnpm@11.0.6",
-  "description": "a lib template for typescript",
+  "private": true,
+  "packageManager": "pnpm@12.4.1+sha512.2e81e399d73fe8390dab25e06aa788ab7a5908248d2f5a370f82b481147a6a7a367bf8048f9a6fdb6460f21a66f0542dedb8b94ca2c8723596741920b1656d4c",
+  "description": "a runtime for agent",
   "author": {
     "name": "qingshaner",
     "url": "https://github.com/Jon-a-than"
   },
   "license": "ISC",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    }
-  },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
   "engines": {
-    "node": ">=22.0.0",
-    "pnpm": ">=11.0.0"
+    "node": ">=24.0.0",
+    "pnpm": ">=12.0.0"
   },
   "publishConfig": {
     "access": "public",
@@ -42,22 +30,22 @@
     "test:cov": "vitest run --coverage"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.10",
+    "@biomejs/biome": "^2.5.13",
     "@changesets/cli": "^2.31.1",
     "@qingshaner/devtools": "^0.0.3",
-    "@types/node": "^26.3.0",
-    "@vitest/coverage-v8": "^4.1.11",
-    "cspell": "^10.1.1",
-    "knip": "^6.32.2",
+    "@types/node": "^26.5.1",
+    "@vitest/coverage-v8": "^5.0.0",
+    "cspell": "^10.3.1",
+    "knip": "^6.35.1",
     "nano-staged": "^1.0.2",
-    "simple-git-hooks": "^2.13.1",
-    "tsdown": "^0.22.14",
+    "simple-git-hooks": "^2.14.0",
+    "tsdown": "^0.23.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm nano-staged",
-    "pre-push": "pnpm run --parallel '/(test|check|check:cspell|check:type|check:knip)/'"
+    "pre-push": "pnpm run '/^(test|check.*)$/'"
   },
   "nano-staged": {
     "*": "pnpm cspell --no-summary --no-progress --no-must-find-files --file-list",

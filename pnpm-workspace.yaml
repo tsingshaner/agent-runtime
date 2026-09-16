@@ -1,3 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+
 allowBuilds:
   '@biomejs/biome': true
   simple-git-hooks: true
+
+minimumReleaseAgeExclude:
+  - '@qingshaner/utility-client@1.1.0'
+  - '@qingshaner/utility-server@1.1.0'
+  - '@qingshaner/utility-shared@1.1.0'
+  - '@qingshaner/utility@1.1.0'

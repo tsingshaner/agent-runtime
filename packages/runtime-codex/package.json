@@ -1,0 +1,42 @@
+{
+  "author": {
+    "name": "qingshaner",
+    "url": "https://github.com/Jon-a-than"
+  },
+  "bugs": {
+    "url": "https://github.com/tsingshaner/agent-runtime/issues"
+  },
+  "description": "Agent runtime by codex",
+  "engines": {
+    "node": "^22.18.0 || ^24.11.0 || >=26.0.0",
+    "pnpm": ">=12.0.0"
+  },
+  "exports": {
+    ".": {
+      "default": "./dist/index.mjs",
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "homepage": "https://github.com/tsingshaner/agent-runtime#readme",
+  "license": "ISC",
+  "main": "dist/index.mjs",
+  "name": "@qingshaner/runtime-codex",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tsingshaner/agent-runtime.git"
+  },
+  "scripts": {
+    "gen:schema": "codex app-server generate-ts --out ./src/schemas"
+  },
+  "type": "module",
+  "types": "dist/index.d.mts",
+  "version": "0.0.0"
+}

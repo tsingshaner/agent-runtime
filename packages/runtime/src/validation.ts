@@ -8,21 +8,33 @@ const NonEmptyStringSchema = v.pipe(v.string(), v.minLength(1))
 export const SessionIdSchema = NonEmptyStringSchema
 export const ArchivedSchema = v.boolean()
 
-function isJson(value: unknown): value is Json {
+function isJson(value: unknown, visiting = new WeakSet<object>()): value is Json {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') {
     return true
   }
   if (typeof value === 'number') {
     return Number.isFinite(value)
   }
-  if (Array.isArray(value)) {
-    return value.every(isJson)
-  }
   if (typeof value !== 'object') {
     return false
   }
-  const prototype = Object.getPrototypeOf(value)
-  return (prototype === Object.prototype || prototype === null) && Object.values(value).every(isJson)
+  if (visiting.has(value)) {
+    return false
+  }
+
+  visiting.add(value)
+  try {
+    if (Array.isArray(value)) {
+      return value.every((item) => isJson(item, visiting))
+    }
+    const prototype = Object.getPrototypeOf(value)
+    return (
+      (prototype === Object.prototype || prototype === null) &&
+      Object.values(value).every((item) => isJson(item, visiting))
+    )
+  } finally {
+    visiting.delete(value)
+  }
 }
 
 export const JsonObjectSchema = v.custom<JsonObject>(

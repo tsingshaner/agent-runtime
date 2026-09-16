@@ -111,6 +111,22 @@ describe('SessionStore sessions', () => {
     })
   })
 
+  test('rejects cyclic session options as invalid input', async () => {
+    const options: Record<string, unknown> = {}
+    options.self = options
+
+    await expect(store.insertSession({ ...session('s1'), options } as never)).rejects.toMatchObject({
+      code: 'INVALID_INPUT'
+    })
+  })
+
+  test('accepts shared acyclic values in session options', async () => {
+    const shared = { enabled: true }
+    const stored = await store.insertSession({ ...session('s1'), options: { first: shared, second: shared } })
+
+    expect(stored.options).toEqual({ first: { enabled: true }, second: { enabled: true } })
+  })
+
   test('returns ISO timestamps', async () => {
     const stored = await store.insertSession(session('s1'))
 

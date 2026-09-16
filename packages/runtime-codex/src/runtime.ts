@@ -51,7 +51,7 @@ const SessionOptionsSchema = v.strictObject({
 })
 export type CodexRuntimeOptions = v.InferInput<typeof OptionsSchema>
 type Notification = Extract<Frame, { kind: 'notification' }>
-type QueueEntry = { frame?: Notification; notice?: AdapterNotice; bytes: number }
+type QueueEntry = { frame?: Notification; notice?: AdapterNotice; bytes: number; responseAttempted?: boolean }
 interface PendingApproval {
   allowedDecisions: ApprovalDecision[]
   responding: boolean
@@ -464,7 +464,11 @@ export class CodexRuntime implements RuntimeAdapter {
       return
     }
     approval.resolved = true
-    this.enqueue(run, { bytes: Buffer.byteLength(JSON.stringify(frame)), frame })
+    this.enqueue(run, {
+      bytes: Buffer.byteLength(JSON.stringify(frame)),
+      frame,
+      responseAttempted: approval.responding
+    })
   }
 
   private requestApproval(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
@@ -625,7 +629,7 @@ export class CodexRuntime implements RuntimeAdapter {
         await run.emit(entry.notice)
       }
       if (entry.frame) {
-        await this.project(run, entry.frame)
+        await this.project(run, entry.frame, entry.responseAttempted)
       }
       run.count--
       run.bytes -= entry.bytes
@@ -640,10 +644,10 @@ export class CodexRuntime implements RuntimeAdapter {
     }
   }
 
-  private async project(run: ActiveRun, frame: Notification): Promise<void> {
+  private async project(run: ActiveRun, frame: Notification, responseAttempted?: boolean): Promise<void> {
     if (frame.method === 'serverRequest/resolved') {
       const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
-      await run.emit({ kind: 'approval-resolved', nativeRequestId: requestId })
+      await run.emit({ kind: 'approval-resolved', nativeRequestId: requestId, responseAttempted })
       run.approvals.get(requestId)?.confirmation?.resolve()
       return
     }

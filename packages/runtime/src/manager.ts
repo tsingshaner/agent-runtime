@@ -306,7 +306,7 @@ export class RuntimeManager {
         await this.store.requestApproval(runId, notice.request)
         return
       case 'approval-resolved':
-        await this.store.resolveApproval(runId, notice.nativeRequestId)
+        await this.store.resolveApproval(runId, notice.nativeRequestId, notice.responseAttempted)
         return
     }
   }

@@ -68,7 +68,15 @@ export type AdapterNotice =
       kind: 'approval'
       request: Omit<Approval, 'id' | 'runId' | 'status' | 'decision'>
     }
-  | { kind: 'approval-resolved'; nativeRequestId: string | number }
+  | {
+      kind: 'approval-resolved'
+      nativeRequestId: string | number
+      /**
+       * Snapshot when native resolution arrives. False means no response was attempted and forces expired/null,
+       * even after a durable claim. Omission falls back to persisted claim state for adapter compatibility.
+       */
+      responseAttempted?: boolean
+    }
 
 export interface AdapterOutcome {
   status: 'succeeded' | 'failed' | 'cancelled'

@@ -440,12 +440,18 @@ export class SessionStore {
     })
   }
 
-  async resolveApproval(runId: string, nativeRequestId: string | number): Promise<void> {
+  async resolveApproval(runId: string, nativeRequestId: string | number, responseAttempted?: boolean): Promise<void> {
     await this.db.transaction(async (tx) => {
       await requireRun(tx, runId)
       const [approval] = await tx
         .update(approvals)
-        .set({ status: sql`case when ${approvals.status} = 'responding' then 'resolved' else 'expired' end` })
+        .set({
+          decision: responseAttempted === false ? null : sql`${approvals.decision}`,
+          status:
+            responseAttempted === false
+              ? 'expired'
+              : sql`case when ${approvals.status} = 'responding' then 'resolved' else 'expired' end`
+        })
         .where(
           and(
             eq(approvals.runId, runId),

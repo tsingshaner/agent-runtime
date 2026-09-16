@@ -1,6 +1,11 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { RuntimeManager } from '@qingshaner/runtime'
 import { afterEach, describe, expect, test } from 'vitest'
 
-import type { AdapterNotice } from '@qingshaner/runtime'
+import type { AdapterNotice, RuntimeAdapter } from '@qingshaner/runtime'
 
 import { closePeers, deferred, done, input, peer, turn } from '../test/runtime-peer'
 
@@ -44,7 +49,7 @@ describe('Codex approvals', () => {
       await expect(p.runtime.respondApproval('run', 0, 'deny')).rejects.toMatchObject({ code: 'APPROVAL_NOT_PENDING' })
       await p.send({ method: 'serverRequest/resolved', params: { requestId: 0, threadId: 'native' } })
       await response
-      expect(notices.at(-1)).toEqual({ kind: 'approval-resolved', nativeRequestId: 0 })
+      expect(notices.at(-1)).toEqual({ kind: 'approval-resolved', nativeRequestId: 0, responseAttempted: true })
       await p.send(done())
       expect(await execution).toEqual({ status: 'succeeded' })
     }
@@ -241,5 +246,75 @@ describe('Codex approvals', () => {
     await p.send(done('native', 'turn', 'interrupted'))
     await response
     expect(await execution).toEqual({ status: 'cancelled' })
+  })
+  test('expires a native self-resolution racing a durable response claim without sending a reply', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'runtime-approval-race-'))
+    const p = await peer()
+    const native = await p.create()
+    const resolutionEntered = deferred()
+    const releaseResolution = deferred()
+    const approvalPersisted = deferred()
+    const adapter: RuntimeAdapter = {
+      cancel: (runId) => p.runtime.cancel(runId),
+      createSession: () => Promise.resolve(native),
+      dispose: () => p.runtime.dispose(),
+      execute: (session, input, emit) =>
+        p.runtime.execute(session, input, async (notice) => {
+          if (notice.kind === 'approval-resolved') {
+            resolutionEntered.resolve()
+            await releaseResolution.promise
+          }
+          await emit(notice)
+          if (notice.kind === 'approval') {
+            approvalPersisted.resolve()
+          }
+        }),
+      kind: p.runtime.kind,
+      respondApproval: (runId, requestId, decision) => p.runtime.respondApproval(runId, requestId, decision),
+      resumeSession: (session) => p.runtime.resumeSession(session)
+    }
+    const manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+    try {
+      const session = await manager.createSession({ cwd: dir, projectId: 'race', runtime: adapter.kind })
+      const { runId } = await manager.run(session.id, { text: 'hello' })
+      const start = await p.request('turn/start')
+      await p.send({ id: start.id, result: { turn: turn('turn') } })
+      await p.send(request(0))
+      await approvalPersisted.promise
+      const [approval] = await manager.listPendingApprovals(runId)
+      if (!approval) {
+        throw new Error('Missing approval')
+      }
+      await p.send({ method: 'serverRequest/resolved', params: { requestId: 0, threadId: 'native' } })
+      await resolutionEntered.promise
+      await expect(manager.respondApproval(runId, approval.id, 'approve')).rejects.toMatchObject({
+        code: 'APPROVAL_RESPONSE_UNCERTAIN'
+      })
+      expect(await manager.listPendingApprovals(runId)).toMatchObject([{ decision: 'approve', status: 'responding' }])
+      // The next received frame must be thread/start, so no native approval response was sent.
+      await p.create('wire-barrier')
+      releaseResolution.resolve()
+      await p.send(done())
+      const events = []
+      for await (const envelope of manager.subscribe(runId)) {
+        events.push(envelope.event)
+      }
+      const resolved = events.filter((event) => event.type === 'CUSTOM' && event.name === 'runtime.approval.resolved')
+      expect(resolved).toEqual([
+        {
+          name: 'runtime.approval.resolved',
+          type: 'CUSTOM',
+          value: { approvalId: approval.id, decision: null, status: 'expired' }
+        }
+      ])
+      await expect(manager.respondApproval(runId, approval.id, 'approve')).rejects.toMatchObject({
+        code: 'APPROVAL_NOT_PENDING'
+      })
+      await p.create('end-barrier')
+    } finally {
+      releaseResolution.resolve()
+      await manager.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
   })
 })

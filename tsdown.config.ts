@@ -1,46 +1,40 @@
-import { glob } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 
 import { defineConfig, type UserConfig } from 'tsdown'
 
 const ROOT = import.meta.dirname
+const packages = [
+  ['runtime', '@qingshaner/runtime'],
+  ['shared', '@internal/shared'],
+  ['runtime-codex', '@qingshaner/runtime-codex']
+] as const
+const alias = Object.fromEntries(
+  packages.map(([directory, name]) => [name, resolve(ROOT, 'packages', directory, 'src')])
+)
 
-const generateAliases = async () => {
-  const packageJsonPaths = await Array.fromAsync(
-    glob(['apps/*/package.json', 'packages/*/package.json'], {
-      cwd: ROOT
-    })
-  )
-
-  return Promise.all(
-    packageJsonPaths.map(async (packageJsonPath) => {
-      const packageJson = await import(fileURLToPath(new URL(packageJsonPath, import.meta.url)), {
-        with: { type: 'json' }
-      })
-
-      return {
-        find: packageJson.default.name,
-        replacement: resolve(ROOT, dirname(packageJsonPath), 'src')
-      }
-    })
-  )
-}
-
-export default defineConfig(async () => {
-  const alias = await generateAliases()
-
-  return Promise.all(
-    alias.map<UserConfig>(({ replacement, find }) => ({
-      cwd: resolve(replacement, '../'),
-      dts: {
-        tsconfig: resolve(ROOT, 'tsconfig.build.json')
-      },
-      entry: 'src/index.ts',
-      format: 'esm',
-      name: find,
-      outDir: resolve(replacement, '../dist'),
+export default defineConfig(
+  packages.map<UserConfig>(([directory, name]) => ({
+    alias,
+    cwd: resolve(ROOT, 'packages', directory),
+    deps: {
+      alwaysBundle: ['@internal/shared'],
+      neverBundle: [
+        '@ag-ui/core',
+        '@electric-sql/pglite',
+        '@logtape/logtape',
+        '@qingshaner/utility',
+        'drizzle-orm',
+        'es-toolkit',
+        'valibot'
+      ]
+    },
+    dts: {
       tsconfig: resolve(ROOT, 'tsconfig.build.json')
-    }))
-  )
-})
+    },
+    entry: 'src/index.ts',
+    format: 'esm',
+    name,
+    outDir: 'dist',
+    tsconfig: resolve(ROOT, 'tsconfig.build.json')
+  }))
+)

@@ -19,7 +19,7 @@
       "assist": {
         "enabled": false
       },
-      "includes": ["package.json"]
+      "includes": ["**/package.json"]
     }
   ]
 }

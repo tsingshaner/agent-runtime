@@ -37,6 +37,9 @@ export default defineConfig(async () => {
           name: find,
           ...configDefaults,
           alias,
+          coverage: {
+            exclude: ['packages/runtime-codex/src/schemas/**', 'packages/runtime-codex/test/fake-app-server.mjs']
+          },
           include: [`${replacement}/**/*.{test,spec}.?(c|m)ts?(x)`],
           root: ROOT,
           typecheck: {
@@ -44,7 +47,7 @@ export default defineConfig(async () => {
             enabled: true,
             ignoreSourceErrors: false,
             only: false,
-            tsconfig: fileURLToPath(new URL('tsconfig.build.json', ROOT))
+            tsconfig: resolve(ROOT, 'tsconfig.build.json')
           }
         }
       }))

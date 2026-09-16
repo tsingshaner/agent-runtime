@@ -1,9 +1,14 @@
 {
   "compilerOptions": {
     "lib": ["ESNext"],
-
+    "paths": {
+      "@internal/shared": ["../packages/shared/src/index.ts"],
+      "@qingshaner/runtime": ["../packages/runtime/src/index.ts"],
+      "@qingshaner/runtime-codex": ["../packages/runtime-codex/src/index.ts"]
+    },
     "rootDir": "..",
-    "target": "ESNext"
+    "target": "ESNext",
+    "types": ["node"]
   },
   "extends": "@qingshaner/devtools/tsconfig/base.json",
   "include": ["../*.config.ts"]

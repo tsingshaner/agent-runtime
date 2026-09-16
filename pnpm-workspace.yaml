@@ -4,6 +4,7 @@ packages:
 
 allowBuilds:
   '@biomejs/biome': true
+  esbuild: true
   simple-git-hooks: true
 
 minimumReleaseAgeExclude:

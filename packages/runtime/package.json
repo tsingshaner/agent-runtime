@@ -1,0 +1,33 @@
+{
+  "dependencies": {
+    "@ag-ui/core": "0.0.59",
+    "@electric-sql/pglite": "0.5.8",
+    "drizzle-orm": "1.0.0-rc.4",
+    "valibot": "1.5.0"
+  },
+  "description": "Agent runtime core",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=12.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "ISC",
+  "main": "dist/index.mjs",
+  "name": "@qingshaner/runtime",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "types": "dist/index.d.mts",
+  "version": "0.0.0"
+}

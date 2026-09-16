@@ -1,4 +1,18 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "tags": ["-lintignore"]
+  "ignoreBinaries": ["codex"],
+  "ignoreDependencies": ["drizzle-kit"],
+  "tags": ["-lintignore"],
+  "workspaces": {
+    "packages/*": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/runtime": {
+      "ignoreDependencies": ["@electric-sql/pglite", "drizzle-orm", "valibot"]
+    },
+    "packages/shared": {
+      "ignoreDependencies": ["es-toolkit"]
+    }
+  }
 }

@@ -3,6 +3,7 @@ import { createServer, type Socket } from 'node:net'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, test } from 'vitest'
 
 import { JsonRpcClient } from './client'
@@ -217,6 +218,39 @@ describe('JsonRpcClient', () => {
     await command({ action: 'resume' })
     await write
     expect((await next('received')).frame.id).toBe('large')
+  })
+
+  test('rejects buffered small replies when the peer closes stdin before completion', async () => {
+    const { client, command } = await peer()
+    await command({ action: 'pause' })
+    // Observe the real pipe only; no stream methods are replaced or production test APIs added.
+    const { stdin } = Reflect.get(client, 'child') as ChildProcessWithoutNullStreams
+    const replies: Promise<{ status: string; code?: string }>[] = []
+    let resolvedWhileBuffered = false
+    for (let batch = 0; batch < 16 && stdin.writableLength === 0; batch++) {
+      for (let index = 0; index < 30; index++) {
+        replies.push(
+          client.reply(replies.length, 'x'.repeat(16_000)).then(
+            () => {
+              resolvedWhileBuffered ||= stdin.writableLength > 0
+              return { status: 'fulfilled' }
+            },
+            (error: { code: string }) => ({ code: error.code, status: 'rejected' })
+          )
+        )
+      }
+      await command({ action: 'stderr', text: 'barrier' })
+    }
+    expect(stdin.writableLength).toBeGreaterThan(0)
+
+    await command({ action: 'close-input' })
+    const results = await Promise.all(replies)
+
+    expect(results.filter((result) => result.status === 'rejected').length).toBeGreaterThan(0)
+    expect(
+      results.filter((result) => result.status === 'rejected').every((result) => result.code === 'PROCESS_EXITED')
+    ).toBe(true)
+    expect(resolvedWhileBuffered).toBe(false)
   })
 
   test.each([16, 2 * 1024 * 1024])('rejects %s-byte writes after the child closes stdin', async (size) => {

@@ -198,13 +198,21 @@ export class JsonRpcClient {
           throw this.failure
         }
         await new Promise<void>((resolve, reject) => {
+          let callbackComplete = false
+          let bufferDrained = false
           const failed = () => {
             cleanup()
             reject(this.failure ?? new RuntimeError('PROCESS_EXITED', 'App-server input failed'))
           }
+          const complete = () => {
+            if (callbackComplete && bufferDrained) {
+              cleanup()
+              resolve()
+            }
+          }
           const drained = () => {
-            cleanup()
-            resolve()
+            bufferDrained = true
+            complete()
           }
           const cleanup = () => {
             this.child.stdin.off('error', failed)
@@ -213,8 +221,16 @@ export class JsonRpcClient {
           }
           this.child.stdin.once('error', failed)
           this.child.stdin.once('close', failed)
-          if (this.child.stdin.write(data)) {
-            drained()
+          bufferDrained = this.child.stdin.write(data, (error) => {
+            if (error) {
+              failed()
+              return
+            }
+            callbackComplete = true
+            complete()
+          })
+          if (bufferDrained) {
+            complete()
           } else {
             this.child.stdin.once('drain', drained)
           }

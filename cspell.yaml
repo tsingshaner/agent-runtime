@@ -17,3 +17,15 @@ ignorePaths:
 words:
   - deepagents
   - langchain
+  - Cordis
+  - fkey
+  - opclass
+  - pgdata
+  - pglite
+  - pkey
+  - realpath
+  - Streamable
+  - timestamptz
+  - unlisten
+  - wakeup
+  - worktrees

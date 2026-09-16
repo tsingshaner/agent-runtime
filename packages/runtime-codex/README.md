@@ -32,3 +32,43 @@ then sends SIGKILL if needed, and always waits for the process to close. The
 `shutdownTimeoutMs` option overrides each grace period. Stderr retains only a
 private 16 KiB tail and is never included in public errors or logs. Process
 errors report only a safe status, exit code, and signal.
+
+## SDK usage
+
+Requires Node.js 24, an authenticated Codex CLI, and an explicitly selected model.
+Importing the package or constructing CodexRuntime starts no process. The first
+create/resume operation lazily starts one owned app-server per runtime instance.
+
+```ts
+import { CodexRuntime } from '@qingshaner/runtime-codex'
+
+const runtime = new CodexRuntime({ model: 'your-model' })
+// Register runtime in RuntimeManager.open({ dataDir, runtimes: [runtime] }).
+```
+
+Constructor options: required `model`; optional `codexHome`, `executable` with
+`command` and `args`, `requestTimeoutMs`, and `shutdownTimeoutMs`. Authentication
+uses the CLI environment/home; never put credentials in session options. No
+configuration file is changed. Session options accept only `model`,
+`sandbox` (`workspace-write` default or `read-only`), and `approvalPolicy`
+(`on-request` default or `never`). Native threads always use `ephemeral: false`.
+Input is text only. Command and file-change approvals support one-time approve
+or deny; unsupported interactive requests are declined or fail explicitly.
+
+Use RuntimeManager's public session/run IDs, not native IDs. Disconnecting a
+subscription does not cancel generation while the host lives. `cancel()` sends
+turn/interrupt without killing the shared child; wait for a terminal run event.
+Process failure affects active runs in that process; a later explicit resume
+can start a fresh process and recover a saved native thread.
+
+The pinned schema and controlled-peer tests establish the protocol baseline;
+real authentication/model behavior additionally requires the opt-in smoke.
+From the repository run `pnpm smoke:codex` for an explicit skipped result, or
+`RUN_CODEX_SMOKE=1 CODEX_MODEL=your-model pnpm smoke:codex` in an interactive
+terminal. Follow approve/deny and cancel prompts. A scenario that was not
+triggered is reported UNVERIFIED, never passed. Run this after any CLI upgrade
+before claiming compatibility. Builds and CI never invoke login or a model.
+
+Persistent prompts, outputs and approvals can contain sensitive information;
+see the runtime package documentation for ownership locks, event retention,
+manual stale-lock recovery, and `clearRunEvents`.

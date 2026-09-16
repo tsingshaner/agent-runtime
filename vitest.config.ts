@@ -9,7 +9,7 @@ export default defineConfig(async () => {
 
   const generateAliases = async () => {
     const packageJsonPaths = await Array.fromAsync(
-      glob(['apps/*/package.json', 'packages/*/package.json'], {
+      glob(['apps/*/package.json', 'packages/*/package.json', 'examples/*/package.json'], {
         cwd: ROOT
       })
     )
@@ -32,15 +32,21 @@ export default defineConfig(async () => {
 
   return {
     test: {
+      coverage: {
+        exclude: ['packages/runtime-codex/src/schemas/**', '**/*.test.ts'],
+        include: ['packages/*/src/**/*.ts']
+      },
+      fileParallelism: false,
       projects: alias.map(({ find, replacement }) => ({
         test: {
           name: find,
           ...configDefaults,
           alias,
-          coverage: {
-            exclude: ['packages/runtime-codex/src/schemas/**', 'packages/runtime-codex/test/fake-app-server.mjs']
-          },
-          include: [`${replacement}/**/*.{test,spec}.?(c|m)ts?(x)`],
+          include: [
+            `${replacement}/**/*.{test,spec}.?(c|m)ts?(x)`,
+            `${dirname(replacement)}/test/**/*.test.ts`,
+            `${dirname(replacement)}/*.test.ts`
+          ],
           root: ROOT,
           typecheck: {
             checker: 'tsc',

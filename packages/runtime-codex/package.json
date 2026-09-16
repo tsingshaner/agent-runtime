@@ -12,14 +12,14 @@
   },
   "description": "Agent runtime by codex",
   "engines": {
-    "node": "^22.18.0 || ^24.11.0 || >=26.0.0",
+    "node": ">=24.0.0",
     "pnpm": ">=12.0.0"
   },
   "exports": {
     ".": {
-      "default": "./dist/index.mjs",
+      "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs",
-      "types": "./dist/index.d.mts"
+      "default": "./dist/index.mjs"
     }
   },
   "files": [

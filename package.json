@@ -28,7 +28,9 @@
     "check:knip": "knip",
     "prepare": "simple-git-hooks",
     "test": "vitest run",
-    "test:cov": "vitest run --coverage"
+    "test:cov": "vitest run --coverage",
+    "example:sdk": "pnpm --filter @internal/sdk-example start",
+    "smoke:codex": "pnpm --filter @internal/sdk-example smoke"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",

@@ -1,0 +1,16 @@
+{
+  "name": "@internal/sdk-example",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "pnpm --workspace-root build && node main.ts",
+    "smoke": "pnpm --workspace-root build && node smoke.ts"
+  },
+  "dependencies": {
+    "@qingshaner/runtime": "workspace:*",
+    "@qingshaner/runtime-codex": "workspace:*"
+  }
+}

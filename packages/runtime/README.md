@@ -1,0 +1,53 @@
+# @qingshaner/runtime
+
+Node.js 24 ESM SDK，用 PGlite 管理会话、运行、审批与 AG-UI 事件。数据库与迁移资源随包交付，可从任意工作目录加载。
+
+```ts
+import { RuntimeManager } from '@qingshaner/runtime'
+import { CodexRuntime } from '@qingshaner/runtime-codex'
+
+const manager = await RuntimeManager.open({
+  dataDir: './.agent-runtime',
+  runtimes: [new CodexRuntime({ model: 'your-model' })],
+})
+try {
+  const session = await manager.createSession({
+    runtime: 'codex', projectId: 'demo', cwd: process.cwd(),
+  })
+  const { runId } = await manager.run(session.id, { text: 'Say hello without tools.' })
+  for await (const envelope of manager.subscribe(runId)) {
+    console.log(envelope)
+    if (envelope.event.type === 'CUSTOM' && envelope.event.name === 'runtime.approval.requested') {
+      for (const approval of await manager.listPendingApprovals(runId)) {
+        await manager.respondApproval(runId, approval.id, 'deny')
+      }
+    }
+  }
+} finally {
+  await manager.dispose()
+}
+```
+
+调用方提供模型与已经鉴权的 Codex CLI。仅注册的适配器可用，每个 runtime 类型只允许一个实例。
+公共导出包含 RuntimeManager、RuntimeError、RuntimeAdapter 和事件/会话/审批类型；内部 Store 不公开。
+
+## 公共操作
+
+| 操作 | 语义 |
+| --- | --- |
+| `createSession` / `getSession` / `listSessions` | 创建、读取、按项目/runtime/归档与游标分页；仅索引成功保存的 SDK 会话 |
+| `resumeSession` | 使用公共 ID 续接其固定适配器的原生会话；不会自动执行输入 |
+| `archiveSession` / `unarchiveSession` | 归档标记；有活跃运行时不能归档，归档会话不能运行 |
+| `run` / `getRun` / `listRuns` | 接受文本输入并返回公共 runId；查询状态或分页历史 |
+| `subscribe` | 持久化后发布的 AG-UI EventEnvelope，支持 afterSequence 和 AbortSignal |
+| `listPendingApprovals` / `respondApproval` | 查询待处理/响应中的请求；单次 approve 或 deny，不重试不确定响应 |
+| `cancel` | 请求取消；RPC 完成并非终态，继续观察事件或 getRun |
+| `clearRunEvents` | 仅清理终态运行事件，保留状态；后续订阅报 EVENTS_CLEARED |
+| `dispose` | 停止接纳工作、取消运行、关闭适配器与数据库；重复调用共享关闭结果 |
+
+公共 ID 与原生 thread/turn ID 不同。订阅结束或断开不会取消执行；刷新保活要求宿主 Node 进程仍存活。
+同一会话最多一个非终态运行，不同会话可以并行。重开会将遗留运行标记为 interrupted、过期审批，保留原事件；不会重试不确定的创建、执行或审批。
+
+事件不自动过期，永久占用磁盘；数据可能包含敏感提示词、输出和审批信息。妥善控制目录权限与备份，不提交 `.agent-runtime` 或凭据。
+一个本地数据目录只允许一个 Manager。`.manager.lock` 遗留后必须确认原进程及数据库已停止并备份，才可人工移除；不能在活跃或关闭状态不明时抢锁，不支持网络文件系统。
+存储失效以 STORAGE_ERROR 停止服务，关闭不完全以 AggregateError 报告；无法确认数据库关闭时保留锁。

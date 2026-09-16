@@ -1,5 +1,6 @@
-import { closeSync } from 'node:fs'
+import { closeSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 let ignoreEnd = false
@@ -10,7 +11,22 @@ if (process.argv.includes('--exit-on-request')) {
   const port = Number(process.argv[process.argv.indexOf('--control-port') + 1])
   const control = connect(port, '127.0.0.1')
   const send = (message) => control.write(`${JSON.stringify(message)}\n`)
-  input.on('line', (line) => send({ event: 'received', frame: JSON.parse(line) }))
+  const stateIndex = process.argv.indexOf('--state-dir')
+  const statePath = stateIndex < 0 ? undefined : join(process.argv[stateIndex + 1], 'threads.json')
+  const threads = new Set(statePath && existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : [])
+  const starts = new Set()
+  input.on('line', (line) => {
+    const frame = JSON.parse(line)
+    if (statePath && frame.method === 'thread/start') {
+      starts.add(frame.id)
+    }
+    if (statePath && frame.method === 'thread/resume' && !threads.has(frame.params.threadId)) {
+      process.stdout.write(
+        `${JSON.stringify({ error: { code: -32602, message: 'Unknown saved thread' }, id: frame.id })}\n`
+      )
+    }
+    send({ event: 'received', frame })
+  })
   input.on('close', () => {
     send({ event: 'stdin-end' })
     if (!ignoreEnd) {
@@ -23,6 +39,10 @@ if (process.argv.includes('--exit-on-request')) {
     const ack = () => send({ event: 'ack' })
     switch (command.action) {
       case 'send':
+        if (statePath && starts.delete(command.frame.id) && command.frame.result?.thread?.id) {
+          threads.add(command.frame.result.thread.id)
+          writeFileSync(statePath, JSON.stringify([...threads]))
+        }
         process.stdout.write(`${JSON.stringify(command.frame)}\n`, ack)
         break
       case 'raw':

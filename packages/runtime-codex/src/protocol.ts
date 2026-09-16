@@ -37,7 +37,7 @@ export const NoPermissionsSchema = v.strictObject({
   scope: v.literal('turn')
 }) satisfies v.GenericSchema<unknown, PermissionsRequestApprovalResponse>
 
-export const JsonSchema: v.GenericSchema<unknown, Json> = v.lazy(() =>
+const JsonSchema: v.GenericSchema<unknown, Json> = v.lazy(() =>
   v.union([
     v.null(),
     v.boolean(),
@@ -67,7 +67,7 @@ export type Frame =
   | { kind: 'notification'; method: string; params: Json }
   | { kind: 'server-request'; id: string | number; method: string; params: Json }
 
-export const InitializeResponseSchema = v.object({
+const InitializeResponseSchema = v.object({
   codexHome: v.string(),
   platformFamily: v.string(),
   platformOs: v.string(),
@@ -78,11 +78,8 @@ export const ThreadResponseSchema = v.object({
   model: v.string(),
   thread: v.object({ id: v.string() })
 }) satisfies v.GenericSchema<unknown, Pick<ThreadStartResponse, 'cwd' | 'model'> & { thread: Pick<Thread, 'id'> }>
-export const TurnErrorSchema = v.object({ message: v.string() }) satisfies v.GenericSchema<
-  unknown,
-  Pick<TurnError, 'message'>
->
-export const TurnSchema = v.object({
+const TurnErrorSchema = v.object({ message: v.string() }) satisfies v.GenericSchema<unknown, Pick<TurnError, 'message'>>
+const TurnSchema = v.object({
   error: v.nullable(TurnErrorSchema),
   id: v.string(),
   status: v.picklist(['completed', 'interrupted', 'failed', 'inProgress'])
@@ -225,7 +222,7 @@ export const RequestResolvedSchema = v.object({ requestId: IdSchema, threadId: v
   unknown,
   ServerRequestResolvedNotification
 >
-export const ErrorNotificationSchema = v.object({
+const ErrorNotificationSchema = v.object({
   error: TurnErrorSchema,
   threadId: v.string(),
   turnId: v.string(),

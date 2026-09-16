@@ -69,8 +69,6 @@ export const CursorSchema = v.strictObject({
 })
 
 export type InsertSessionInput = v.InferOutput<typeof InsertSessionInputSchema>
-export type PageInput = v.InferOutput<typeof PageInputSchema>
-export type SessionFilterInput = v.InferOutput<typeof SessionFilterSchema>
 export type Cursor = v.InferOutput<typeof CursorSchema>
 
 export function parseInput<TSchema extends v.GenericSchema>(schema: TSchema, input: unknown): v.InferOutput<TSchema> {

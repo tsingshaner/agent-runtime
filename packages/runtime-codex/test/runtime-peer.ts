@@ -4,9 +4,9 @@ import { createServer, type Socket } from 'node:net'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
-import type { Json } from '@qingshaner/runtime'
+import { CodexRuntime } from '@qingshaner/runtime-codex'
 
-import { CodexRuntime } from '../src/runtime'
+import type { Json } from '@qingshaner/runtime'
 
 export const fakePath = fileURLToPath(new URL('./fake-app-server.mjs', import.meta.url))
 export const cwd = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '')
@@ -27,7 +27,7 @@ export function deferred() {
   return { promise, resolve }
 }
 
-export async function peer(requestTimeoutMs = 1000) {
+export async function peer(requestTimeoutMs = 1000, stateDir?: string) {
   const server = createServer()
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -64,7 +64,10 @@ export async function peer(requestTimeoutMs = 1000) {
     return new Promise((resolve) => waiting.push({ event, resolve }))
   }
   const runtime = new CodexRuntime({
-    executable: { args: [fakePath, '--control-port', String(address.port)], command: process.execPath },
+    executable: {
+      args: [fakePath, '--control-port', String(address.port), ...(stateDir ? ['--state-dir', stateDir] : [])],
+      command: process.execPath
+    },
     model: 'model-test',
     requestTimeoutMs,
     shutdownTimeoutMs: 30

@@ -8,8 +8,6 @@ node_modules
 .changeset/README.md
 *.tsbuildinfo
 
-packages/runtime-codex/src/schemas
-
 .idea
 .vscode/**/*
 !.vscode/settings.json

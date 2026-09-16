@@ -10,3 +10,25 @@
 </p>
 
 Agent runtime by codex
+
+## Protocol baseline
+
+The checked-in protocol types come from **codex-cli 0.153.4**, without
+experimental APIs. This is the only verified version. Builds use these files
+and do not invoke or require an installed Codex CLI.
+
+To regenerate the consumed types and their recursive imports, install exactly
+that CLI version and run `pnpm --filter @qingshaner/runtime-codex gen:schema`.
+The script rejects other versions and preserves the generated headers.
+
+The internal transport uses newline-delimited JSON over piped stdio, a 15-second
+request timeout, and no automatic retries. An incoming frame or queued outgoing
+data exceeding 8 MiB closes the transport with `STREAM_OVERFLOW`; every session
+sharing that app-server is affected. Frame consumers run synchronously; the
+adapter owns its separate bounded async notification queue.
+
+Shutdown closes stdin, waits 2 seconds, sends SIGTERM, waits another 2 seconds,
+then sends SIGKILL if needed, and always waits for the process to close. The
+`shutdownTimeoutMs` option overrides each grace period. Stderr retains only a
+private 16 KiB tail and is never included in public errors or logs. Process
+errors report only a safe status, exit code, and signal.

@@ -225,7 +225,14 @@ importers:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4
 
-  packages/runtime-codex: {}
+  packages/runtime-codex:
+    dependencies:
+      '@qingshaner/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      valibot:
+        specifier: 1.5.0
+        version: 1.5.0(typescript@7.0.2)
 
   packages/shared:
     dependencies:

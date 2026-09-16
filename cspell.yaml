@@ -3,6 +3,7 @@
 import: '@qingshaner/devtools/cspell'
 
 ignorePaths:
+  - packages/runtime-codex/src/schemas/**
   - .gitignore
   - package-lock.json
   - pnpm-lock.yaml

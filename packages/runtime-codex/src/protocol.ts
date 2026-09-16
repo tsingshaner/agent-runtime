@@ -5,15 +5,37 @@ import * as v from 'valibot'
 import type { InitializeResponse } from './schemas/InitializeResponse'
 import type { AgentMessageDeltaNotification } from './schemas/v2/AgentMessageDeltaNotification'
 import type { CommandExecutionRequestApprovalParams } from './schemas/v2/CommandExecutionRequestApprovalParams'
+import type { CommandExecutionRequestApprovalResponse } from './schemas/v2/CommandExecutionRequestApprovalResponse'
 import type { FileChangeRequestApprovalParams } from './schemas/v2/FileChangeRequestApprovalParams'
+import type { FileChangeRequestApprovalResponse } from './schemas/v2/FileChangeRequestApprovalResponse'
 import type { ItemCompletedNotification } from './schemas/v2/ItemCompletedNotification'
 import type { ItemStartedNotification } from './schemas/v2/ItemStartedNotification'
+import type { McpServerElicitationRequestResponse } from './schemas/v2/McpServerElicitationRequestResponse'
+import type { PermissionsRequestApprovalResponse } from './schemas/v2/PermissionsRequestApprovalResponse'
 import type { ServerRequestResolvedNotification } from './schemas/v2/ServerRequestResolvedNotification'
 import type { Thread } from './schemas/v2/Thread'
 import type { ThreadItem } from './schemas/v2/ThreadItem'
 import type { ThreadStartResponse } from './schemas/v2/ThreadStartResponse'
+import type { ToolRequestUserInputResponse } from './schemas/v2/ToolRequestUserInputResponse'
 import type { Turn } from './schemas/v2/Turn'
 import type { TurnError } from './schemas/v2/TurnError'
+
+export const ApprovalResponseSchema = v.strictObject({
+  decision: v.picklist(['accept', 'decline'])
+}) satisfies v.GenericSchema<unknown, CommandExecutionRequestApprovalResponse & FileChangeRequestApprovalResponse>
+export const EmptyAnswersSchema = v.strictObject({ answers: v.strictObject({}) }) satisfies v.GenericSchema<
+  unknown,
+  ToolRequestUserInputResponse
+>
+export const DeclineElicitationSchema = v.strictObject({
+  _meta: v.null(),
+  action: v.literal('decline'),
+  content: v.null()
+}) satisfies v.GenericSchema<unknown, McpServerElicitationRequestResponse>
+export const NoPermissionsSchema = v.strictObject({
+  permissions: v.strictObject({}),
+  scope: v.literal('turn')
+}) satisfies v.GenericSchema<unknown, PermissionsRequestApprovalResponse>
 
 export const JsonSchema: v.GenericSchema<unknown, Json> = v.lazy(() =>
   v.union([
@@ -169,7 +191,15 @@ export const ItemNotificationSchema = v.object({
     item: Pick<ThreadItem, 'type' | 'id'>
   }
 >
+const AvailableDecisionsSchema = v.optional(
+  v.nullable(
+    v.array(
+      v.union([v.picklist(['accept', 'acceptForSession', 'decline', 'cancel']), v.record(v.string(), JsonSchema)])
+    )
+  )
+)
 export const CommandApprovalSchema = v.object({
+  availableDecisions: AvailableDecisionsSchema,
   command: v.optional(v.nullable(v.string())),
   cwd: v.optional(v.nullable(v.string())),
   itemId: v.string(),
@@ -181,6 +211,7 @@ export const CommandApprovalSchema = v.object({
   Pick<CommandExecutionRequestApprovalParams, 'threadId' | 'turnId' | 'itemId' | 'command' | 'cwd' | 'reason'>
 >
 export const FileApprovalSchema = v.object({
+  availableDecisions: AvailableDecisionsSchema,
   grantRoot: v.optional(v.nullable(v.string())),
   itemId: v.string(),
   reason: v.optional(v.nullable(v.string())),

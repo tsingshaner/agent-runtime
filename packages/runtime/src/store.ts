@@ -1,3 +1,5 @@
+// cspell:ignore pglite regclass pgdata timestamptz
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -7,6 +9,7 @@ import { and, asc, defineRelations, desc, eq, getTableColumns, gt, inArray, sql 
 import { readMigrationFiles } from 'drizzle-orm/migrator'
 import { drizzle, type PgliteDatabase } from 'drizzle-orm/pglite'
 import { migrate } from 'drizzle-orm/pglite/migrator'
+import * as v from 'valibot'
 
 import { parseEvent, startedEvent, type TerminalOutcome, terminalEvent } from './ag-ui'
 import { RuntimeError } from './errors'
@@ -20,14 +23,32 @@ import {
   CursorSchema,
   type InsertSessionInput,
   InsertSessionInputSchema,
+  JsonObjectSchema,
   PageInputSchema,
   parseInput,
   SessionFilterSchema,
   SessionIdSchema
 } from './validation'
 
-import type { AgUiEvent, EventEnvelope, Page, Run, Session, SessionFilter } from './types'
+import type {
+  AdapterNotice,
+  AgUiEvent,
+  Approval,
+  ApprovalDecision,
+  EventEnvelope,
+  Page,
+  Run,
+  Session,
+  SessionFilter
+} from './types'
 
+const DecisionSchema = v.picklist(['approve', 'deny'])
+const ApprovalRequestSchema = v.strictObject({
+  allowedDecisions: v.pipe(v.array(DecisionSchema), v.minLength(1)),
+  detail: JsonObjectSchema,
+  kind: v.picklist(['command', 'file-change']),
+  nativeRequestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())])
+})
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url))
 const relations = defineRelations(schema)
 const activeStatuses = ['starting', 'running', 'waiting_approval', 'cancelling'] as const
@@ -349,6 +370,135 @@ export class SessionStore {
     if (changed) {
       this.notifyRunChange(runId)
     }
+  }
+
+  async requestApproval(
+    runId: string,
+    request: Extract<AdapterNotice, { kind: 'approval' }>['request']
+  ): Promise<Approval> {
+    const validated = parseInput(ApprovalRequestSchema, request)
+    const approval = await this.db.transaction(async (tx) => {
+      const run = await requireRun(tx, runId)
+      if (!activeStatuses.some((status) => status === run.status)) {
+        throw new RuntimeError('RUN_TERMINAL', 'Run is terminal')
+      }
+      const [existing] = await tx
+        .select()
+        .from(approvals)
+        .where(and(eq(approvals.runId, runId), eq(approvals.nativeRequestId, validated.nativeRequestId)))
+      if (existing) {
+        return existing
+      }
+      const [inserted] = await tx
+        .insert(approvals)
+        .values({ ...validated, id: randomUUID(), runId, status: 'pending' })
+        .returning()
+      if (!inserted) {
+        throw new Error('Approval insert returned no row')
+      }
+      await tx
+        .update(runs)
+        .set({ status: 'waiting_approval' })
+        .where(and(eq(runs.id, runId), inArray(runs.status, ['starting', 'running'])))
+      const { nativeRequestId: _nativeRequestId, ...publicApproval } = inserted
+      await persistEvent(
+        tx,
+        runId,
+        parseEvent({ name: 'runtime.approval.requested', type: EventType.CUSTOM, value: publicApproval })
+      )
+      return inserted
+    })
+    this.notifyRunChange(runId)
+    return approval
+  }
+
+  async claimApproval(runId: string, approvalId: string, decision: ApprovalDecision): Promise<Approval> {
+    parseInput(SessionIdSchema, runId)
+    parseInput(SessionIdSchema, approvalId)
+    parseInput(DecisionSchema, decision)
+    return await this.db.transaction(async (tx) => {
+      const condition = and(eq(approvals.runId, runId), eq(approvals.id, approvalId))
+      const [approval] = await tx.select().from(approvals).where(condition)
+      if (!approval) {
+        throw new RuntimeError('APPROVAL_NOT_FOUND', 'Approval not found for run')
+      }
+      if (approval.status !== 'pending') {
+        throw new RuntimeError('APPROVAL_NOT_PENDING', 'Approval is not pending')
+      }
+      if (!approval.allowedDecisions.includes(decision)) {
+        throw new RuntimeError('INVALID_INPUT', 'Decision is not allowed')
+      }
+      const [claimed] = await tx
+        .update(approvals)
+        .set({ decision, status: 'responding' })
+        .where(and(condition, eq(approvals.status, 'pending')))
+        .returning()
+      if (!claimed) {
+        throw new RuntimeError('APPROVAL_NOT_PENDING', 'Approval is not pending')
+      }
+      return claimed
+    })
+  }
+
+  async resolveApproval(runId: string, nativeRequestId: string | number): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await requireRun(tx, runId)
+      const [approval] = await tx
+        .update(approvals)
+        .set({ status: sql`case when ${approvals.status} = 'responding' then 'resolved' else 'expired' end` })
+        .where(
+          and(
+            eq(approvals.runId, runId),
+            eq(approvals.nativeRequestId, nativeRequestId),
+            inArray(approvals.status, ['pending', 'responding'])
+          )
+        )
+        .returning()
+      if (!approval) {
+        return
+      }
+      await persistEvent(
+        tx,
+        runId,
+        parseEvent({
+          name: 'runtime.approval.resolved',
+          type: EventType.CUSTOM,
+          value: { approvalId: approval.id, decision: approval.decision, status: approval.status }
+        })
+      )
+      const [remaining] = await tx
+        .select({ id: approvals.id })
+        .from(approvals)
+        .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'responding'])))
+        .limit(1)
+      if (!remaining) {
+        await tx
+          .update(runs)
+          .set({ status: 'running' })
+          .where(and(eq(runs.id, runId), eq(runs.status, 'waiting_approval')))
+      }
+    })
+    this.notifyRunChange(runId)
+  }
+
+  async listPendingApprovals(runId: string): Promise<Approval[]> {
+    await this.getRun(runId)
+    return this.db
+      .select()
+      .from(approvals)
+      .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'responding'])))
+      .orderBy(asc(approvals.id))
+  }
+
+  async markCancelling(runId: string): Promise<Run> {
+    return await this.db.transaction(async (tx) => {
+      await requireRun(tx, runId)
+      await tx
+        .update(runs)
+        .set({ status: 'cancelling' })
+        .where(and(eq(runs.id, runId), inArray(runs.status, activeStatuses)))
+      return requireRun(tx, runId)
+    })
   }
 
   readEventPage(runId: string, afterSequence: number, limit = 128): Promise<EventEnvelope[]> {

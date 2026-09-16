@@ -2,7 +2,14 @@ import { realpath } from 'node:fs/promises'
 
 import { RuntimeError } from '../src/errors'
 
-import type { AdapterNotice, AdapterOutcome, JsonObject, NativeSession, RuntimeAdapter } from '../src/types'
+import type {
+  AdapterNotice,
+  AdapterOutcome,
+  ApprovalDecision,
+  JsonObject,
+  NativeSession,
+  RuntimeAdapter
+} from '../src/types'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -25,6 +32,12 @@ export class ManualAdapter implements RuntimeAdapter {
     { emit: (notice: AdapterNotice) => Promise<void>; outcome: ReturnType<typeof deferred<AdapterOutcome>> }
   >()
   private readonly starts = new Map<string, ReturnType<typeof deferred<void>>>()
+  readonly decisions: { runId: string; nativeRequestId: string | number; decision: ApprovalDecision }[] = []
+  cancelError?: Error
+  finishOnCancel = true
+  approvalError?: Error
+  confirmApprovals = true
+  resumeGate?: Promise<void>
   private disposed = false
 
   async createSession(input: { cwd: string; options?: JsonObject }): Promise<NativeSession> {
@@ -39,7 +52,7 @@ export class ManualAdapter implements RuntimeAdapter {
 
   resumeSession(session: NativeSession): Promise<void> {
     this.resumed.push(session)
-    return Promise.resolve()
+    return this.resumeGate ?? Promise.resolve()
   }
 
   async execute(
@@ -99,12 +112,23 @@ export class ManualAdapter implements RuntimeAdapter {
 
   cancel(runId: string): Promise<void> {
     this.cancelled.push(runId)
-    this.finish(runId, { status: 'cancelled' })
+    if (this.cancelError) {
+      return Promise.reject(this.cancelError)
+    }
+    if (this.finishOnCancel) {
+      this.finish(runId, { status: 'cancelled' })
+    }
     return Promise.resolve()
   }
 
-  respondApproval(): Promise<void> {
-    return Promise.reject(new RuntimeError('APPROVAL_NOT_FOUND', 'No pending approval'))
+  async respondApproval(runId: string, nativeRequestId: string | number, decision: ApprovalDecision): Promise<void> {
+    this.decisions.push({ decision, nativeRequestId, runId })
+    if (this.approvalError) {
+      throw this.approvalError
+    }
+    if (this.confirmApprovals) {
+      await this.push(runId, { kind: 'approval-resolved', nativeRequestId })
+    }
   }
 
   dispose(): Promise<void> {

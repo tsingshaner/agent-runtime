@@ -10,6 +10,8 @@ import { JsonObjectSchema, parseInput } from './validation'
 import type {
   AdapterNotice,
   AdapterOutcome,
+  Approval,
+  ApprovalDecision,
   CreateSessionInput,
   EventEnvelope,
   ManagerOptions,
@@ -55,6 +57,8 @@ const ManagerOptionsSchema = v.strictObject({
 
 export class RuntimeManager {
   private readonly active = new Map<string, Promise<void>>()
+  private readonly ready = new Map<string, Promise<void>>()
+  private readonly cancellations = new Map<string, Promise<void>>()
   private closing = false
   private closePromise?: Promise<void>
   private storageError?: unknown
@@ -133,13 +137,25 @@ export class RuntimeManager {
     const adapter = this.getAdapter(session.runtime)
     const runId = randomUUID()
     await this.store.beginRun(sessionId, runId)
-    const completion = this.drive(adapter, session, runId, validated)
+    let signalReady!: () => void
+    this.ready.set(
+      runId,
+      new Promise<void>((resolve) => {
+        signalReady = resolve
+      })
+    )
+    const completion = this.drive(adapter, session, runId, validated, signalReady)
       .catch((error: unknown) => {
         // Fail closed if even the terminal transaction cannot be persisted.
         this.storageError = error
         this.closing = true
       })
-      .finally(() => this.active.delete(runId))
+      .finally(() => {
+        signalReady()
+        this.active.delete(runId)
+        this.ready.delete(runId)
+        this.cancellations.delete(runId)
+      })
     this.active.set(runId, completion)
     return { runId, sessionId }
   }
@@ -162,6 +178,59 @@ export class RuntimeManager {
   async clearRunEvents(runId: string): Promise<void> {
     this.assertOpen()
     await this.store.clearRunEvents(runId)
+  }
+
+  async listPendingApprovals(runId: string): Promise<Approval[]> {
+    this.assertOpen()
+    return await this.store.listPendingApprovals(runId)
+  }
+
+  async respondApproval(runId: string, approvalId: string, decision: ApprovalDecision): Promise<void> {
+    this.assertOpen()
+    const run = await this.store.getRun(runId)
+    const session = await this.store.getSession(run.sessionId)
+    const adapter = this.getAdapter(session.runtime)
+    const approval = await this.store.claimApproval(runId, approvalId, decision)
+    try {
+      await adapter.respondApproval(runId, approval.nativeRequestId, decision)
+    } catch (cause) {
+      throw new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Approval response was not confirmed', { cause })
+    }
+  }
+
+  async cancel(runId: string): Promise<void> {
+    this.assertOpen()
+    let cancellation = this.cancellations.get(runId)
+    if (!cancellation) {
+      cancellation = this.cancelRun(runId).finally(() => {
+        if (!this.active.has(runId)) {
+          this.cancellations.delete(runId)
+        }
+      })
+      this.cancellations.set(runId, cancellation)
+    }
+    await cancellation
+  }
+
+  private async cancelRun(runId: string): Promise<void> {
+    const run = await this.store.markCancelling(runId)
+    if (run.status !== 'cancelling') {
+      return
+    }
+    const session = await this.store.getSession(run.sessionId)
+    const adapter = this.getAdapter(session.runtime)
+    await this.ready.get(runId)
+    if ((await this.store.getRun(runId)).status !== 'cancelling') {
+      return
+    }
+    try {
+      await adapter.cancel(runId)
+    } catch (cause) {
+      if (cause instanceof RuntimeError && cause.code === 'RPC_TIMEOUT') {
+        throw new RuntimeError('CANCEL_TIMEOUT', 'Cancellation request timed out', { cause })
+      }
+      throw cause
+    }
   }
 
   dispose(): Promise<void> {
@@ -201,15 +270,18 @@ export class RuntimeManager {
     adapter: RuntimeAdapter,
     session: Session,
     runId: string,
-    input: { text: string }
+    input: { text: string },
+    ready: () => void
   ): Promise<void> {
     let outcome: AdapterOutcome
     try {
       const native = this.nativeSession(session)
       await adapter.resumeSession(native)
-      outcome = await adapter.execute(native, { ...input, runId, sessionId: session.id }, (notice) =>
+      const execution = adapter.execute(native, { ...input, runId, sessionId: session.id }, (notice) =>
         this.receive(runId, notice)
       )
+      ready()
+      outcome = await execution
     } catch (error) {
       outcome = {
         error: {
@@ -230,8 +302,12 @@ export class RuntimeManager {
       case 'event':
         await this.store.appendEvent(runId, notice.event)
         return
-      default:
-        throw new RuntimeError('UNSUPPORTED_APPROVAL', 'Approval delivery is not supported')
+      case 'approval':
+        await this.store.requestApproval(runId, notice.request)
+        return
+      case 'approval-resolved':
+        await this.store.resolveApproval(runId, notice.nativeRequestId)
+        return
     }
   }
 }

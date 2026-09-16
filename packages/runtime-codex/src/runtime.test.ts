@@ -1,153 +1,11 @@
-import { once } from 'node:events'
-import { createServer, type Socket } from 'node:net'
-import { createInterface } from 'node:readline'
-import { fileURLToPath } from 'node:url'
-
 import { afterEach, describe, expect, test } from 'vitest'
 
-import type { AdapterNotice, Json, JsonObject, NativeSession } from '@qingshaner/runtime'
+import type { AdapterNotice, JsonObject, NativeSession } from '@qingshaner/runtime'
 
+import { closePeers, cwd, deferred, delta, done, fakePath, input, peer, turn } from '../test/runtime-peer'
 import { CodexRuntime } from './runtime'
 
-const fakePath = fileURLToPath(new URL('../test/fake-app-server.mjs', import.meta.url))
-const cwd = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '')
-const cleanup: (() => Promise<void>)[] = []
-afterEach(async () => {
-  for (const close of cleanup.splice(0).reverse()) {
-    await close()
-  }
-})
-type WireFrame = { id: number | string; method: string; params: Record<string, Json>; result?: Json }
-type Control = { event: string; frame: WireFrame }
-
-function deferred() {
-  let resolve!: () => void
-  const promise = new Promise<void>((done) => {
-    resolve = done
-  })
-  return { promise, resolve }
-}
-
-async function peer(requestTimeoutMs = 1000) {
-  const server = createServer()
-  server.listen(0, '127.0.0.1')
-  await once(server, 'listening')
-  const address = server.address()
-  if (!address || typeof address === 'string') {
-    throw new Error('Missing loopback address')
-  }
-  let connections = 0
-  let socket: Socket | undefined
-  const messages: Control[] = []
-  const waiting: { event: string; resolve: (message: Control) => void }[] = []
-  server.on('connection', (connected: Socket) => {
-    connections++
-    socket = connected
-    createInterface({ input: socket }).on('line', (line) => {
-      const message = JSON.parse(line) as Control
-      const index = waiting.findIndex((waiter) => waiter.event === message.event)
-      const waiter = waiting.splice(index < 0 ? waiting.length : index, 1)[0]
-      if (waiter) {
-        waiter.resolve(message)
-      } else {
-        messages.push(message)
-      }
-    })
-  })
-  const next = (event: string): Promise<Control> => {
-    const index = messages.findIndex((message) => message.event === event)
-    if (index >= 0) {
-      const message = messages.splice(index, 1)[0]
-      if (message) {
-        return Promise.resolve(message)
-      }
-    }
-    return new Promise((resolve) => waiting.push({ event, resolve }))
-  }
-  const runtime = new CodexRuntime({
-    executable: { args: [fakePath, '--control-port', String(address.port)], command: process.execPath },
-    model: 'model-test',
-    requestTimeoutMs,
-    shutdownTimeoutMs: 30
-  })
-  cleanup.push(async () => {
-    await runtime.dispose()
-    socket?.destroy()
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-  })
-  const command = async (value: { action: string; [key: string]: unknown }) => {
-    if (!socket) {
-      throw new Error('Peer has not connected')
-    }
-    socket.write(`${JSON.stringify(value)}\n`)
-    if (value.action !== 'exit') {
-      await next('ack')
-    }
-  }
-  const send = (frame: unknown) => command({ action: 'send', frame })
-  const request = async (method?: string) => {
-    const { frame } = await next('received')
-    // biome-ignore lint/suspicious/noMisplacedAssertion: Awaited peer assertion helper.
-    expect(frame.method).toBe(method)
-    return frame
-  }
-  const handshake = async () => {
-    await next('ready')
-    const frame = await request('initialize')
-    // biome-ignore lint/suspicious/noMisplacedAssertion: Awaited handshake assertion helper.
-    expect(frame.params).toEqual({
-      capabilities: null,
-      clientInfo: { name: 'agent-runtime', title: null, version: '0.0.0' }
-    })
-    await send({
-      id: frame.id,
-      result: { codexHome: '/tmp', platformFamily: 'unix', platformOs: 'macos', userAgent: 'test' }
-    })
-    const initialized = await request('initialized')
-    // biome-ignore lint/suspicious/noMisplacedAssertion: Awaited handshake assertion helper.
-    expect(initialized).not.toHaveProperty('id')
-  }
-  const create = async (id = 'native') => {
-    const pending = runtime.createSession({ cwd })
-    if (connections === 0) {
-      await handshake()
-    }
-    const frame = await request('thread/start')
-    await send({ id: frame.id, result: { cwd, model: 'model-test', thread: { id } } })
-    return pending
-  }
-  return {
-    closed: async () => {
-      if (socket && !socket.destroyed) {
-        await once(socket, 'close')
-      }
-    },
-    command,
-    connections: () => connections,
-    create,
-    exit: async () => {
-      // Observe real transport completion; socket close can precede its exit listener.
-      const client = Reflect.get(runtime, 'client') as object
-      const exited = Reflect.get(client, 'exited') as Promise<void>
-      await command({ action: 'exit' })
-      await exited
-    },
-    handshake,
-    request,
-    runtime,
-    send
-  }
-}
-const turn = (id: string, status = 'inProgress') => ({ error: null, id, status })
-const done = (threadId = 'native', id = 'turn', status = 'completed') => ({
-  method: 'turn/completed',
-  params: { threadId, turn: turn(id, status) }
-})
-const delta = (threadId = 'native', turnId = 'turn', text = 'hello') => ({
-  method: 'item/agentMessage/delta',
-  params: { delta: text, itemId: 'message', threadId, turnId }
-})
-const input = { runId: 'run', sessionId: 'session', text: 'hello' }
+afterEach(closePeers)
 
 describe('CodexRuntime', () => {
   test('constructs lazily and shares one handshake across concurrent creation', async () => {
@@ -245,12 +103,12 @@ describe('CodexRuntime', () => {
     const session = await p.create()
     const execution = p.runtime.execute(session, input, async () => {})
     const start = await p.request('turn/start')
-    await p.runtime.cancel('run')
-    await p.runtime.cancel('run')
+    const cancellations = [p.runtime.cancel('run'), p.runtime.cancel('run')]
     await p.send({ id: start.id, result: { turn: turn('turn') } })
     const interrupt = await p.request('turn/interrupt')
     expect(interrupt.params).toEqual({ threadId: 'native', turnId: 'turn' })
     await p.send({ id: interrupt.id, result: {} })
+    await Promise.all(cancellations)
     await p.send(done())
     expect(await execution).toEqual({ status: 'succeeded' })
     const next = p.runtime.createSession({ cwd })
@@ -321,22 +179,6 @@ describe('CodexRuntime', () => {
     ).toEqual(['other text'])
     expect(a.at(-1)).toEqual({ event: { messageId: 'run:message', type: 'TEXT_MESSAGE_END' }, kind: 'event' })
   })
-
-  test.each(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'])(
-    'declines %s safely without an approval handler',
-    async (method) => {
-      const p = await peer()
-      const session = await p.create()
-      const execution = p.runtime.execute(session, input, async () => {})
-      const start = await p.request('turn/start')
-      await p.send({ id: start.id, result: { turn: turn('turn') } })
-      await p.send({ id: 'approval', method, params: { itemId: 'tool', threadId: 'native', turnId: 'turn' } })
-      const reply = await p.request()
-      expect(reply).toEqual({ id: 'approval', result: { decision: 'decline' } })
-      await p.send(done())
-      expect(await execution).toEqual({ status: 'succeeded' })
-    }
-  )
 
   test('restarts and resumes the saved thread after process exit', async () => {
     const p = await peer()
@@ -503,7 +345,7 @@ describe('CodexRuntime', () => {
     const execution = p.runtime.execute(session, input, async () => {})
     const start = await p.request('turn/start')
     await p.send({ id: start.id, result: { turn: turn('turn') } })
-    const cancellation = expect(p.runtime.cancel('run')).rejects.toMatchObject({ code: 'RPC_TIMEOUT' })
+    const cancellation = expect(p.runtime.cancel('run')).rejects.toMatchObject({ code: 'CANCEL_TIMEOUT' })
     await p.request('turn/interrupt')
     await cancellation
     const other = await p.create('other')

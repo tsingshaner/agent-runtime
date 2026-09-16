@@ -204,21 +204,6 @@ describe('RuntimeManager', () => {
     expect(adapter.created).toHaveLength(1)
   })
 
-  test('fails unsupported approval delivery instead of waiting or approving', async () => {
-    const session = await create()
-    const { runId } = await manager.run(session.id, { text: 'hello' })
-    await adapter.waitStarted(runId)
-
-    await expect(
-      adapter.push(runId, {
-        kind: 'approval',
-        request: { allowedDecisions: ['approve', 'deny'], detail: {}, kind: 'command', nativeRequestId: 1 }
-      })
-    ).rejects.toMatchObject({ code: 'UNSUPPORTED_APPROVAL' })
-    await collect(manager.subscribe(runId))
-    expect((await manager.getRun(runId)).status).toBe('failed')
-  })
-
   test('clears terminal events while retaining the run index', async () => {
     const session = await create()
     const { runId } = await manager.run(session.id, { text: 'hello' })

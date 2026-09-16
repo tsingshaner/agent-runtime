@@ -4,6 +4,7 @@ import {
   type AdapterNotice,
   type AdapterOutcome,
   type ApprovalDecision,
+  type Json,
   type JsonObject,
   type NativeSession,
   type RuntimeAdapter,
@@ -14,7 +15,20 @@ import * as v from 'valibot'
 import { version } from '../package.json'
 import { JsonRpcClient } from './client'
 import { CodexEventMapper } from './events'
-import { type Frame, parseProtocol, ThreadResponseSchema, TurnNotificationSchema, TurnResponseSchema } from './protocol'
+import {
+  ApprovalResponseSchema,
+  CommandApprovalSchema,
+  DeclineElicitationSchema,
+  EmptyAnswersSchema,
+  FileApprovalSchema,
+  type Frame,
+  NoPermissionsSchema,
+  parseProtocol,
+  RequestResolvedSchema,
+  ThreadResponseSchema,
+  TurnNotificationSchema,
+  TurnResponseSchema
+} from './protocol'
 
 import type { InitializeParams } from './schemas/InitializeParams'
 import type { ThreadResumeParams } from './schemas/v2/ThreadResumeParams'
@@ -38,6 +52,12 @@ const SessionOptionsSchema = v.strictObject({
 export type CodexRuntimeOptions = v.InferInput<typeof OptionsSchema>
 type Notification = Extract<Frame, { kind: 'notification' }>
 type QueueEntry = { frame?: Notification; notice?: AdapterNotice; bytes: number }
+interface PendingApproval {
+  allowedDecisions: ApprovalDecision[]
+  responding: boolean
+  resolved: boolean
+  confirmation?: ReturnType<typeof deferred>
+}
 interface ActiveRun {
   runId: string
   threadId: string
@@ -52,6 +72,8 @@ interface ActiveRun {
   responseDone: boolean
   cancelRequested: boolean
   interrupt?: Promise<void>
+  cancellation?: ReturnType<typeof deferred>
+  approvals: Map<string | number, PendingApproval>
   fault?: RuntimeError
   outcome?: AdapterOutcome
   stopping?: Promise<void>
@@ -59,6 +81,16 @@ interface ActiveRun {
   onNativeEnd?: () => void
   finished: boolean
   resolve: (outcome: AdapterOutcome) => void
+}
+
+function deferred() {
+  let resolve!: () => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, reject, resolve }
 }
 
 function validate<T extends v.GenericSchema>(schema: T, value: unknown): v.InferOutput<T> {
@@ -147,6 +179,7 @@ export class CodexRuntime implements RuntimeAdapter {
     }
     return await new Promise<AdapterOutcome>((resolve) => {
       const run: ActiveRun = {
+        approvals: new Map(),
         bytes: 0,
         cancelRequested: false,
         count: 0,
@@ -174,15 +207,38 @@ export class CodexRuntime implements RuntimeAdapter {
       return
     }
     run.cancelRequested = true
-    if (run.turnId) {
-      await this.interrupt(run)
-    }
+    run.cancellation ??= deferred()
+    this.sendCancellation(run)
+    await run.cancellation.promise
   }
 
-  // biome-ignore lint/suspicious/useAwait: Adapter methods consistently reject asynchronously.
-  async respondApproval(_runId: string, _nativeRequestId: string | number, _decision: ApprovalDecision): Promise<void> {
+  async respondApproval(runId: string, nativeRequestId: string | number, decision: ApprovalDecision): Promise<void> {
     this.checkOpen()
-    throw new RuntimeError('APPROVAL_NOT_FOUND', 'No pending approval request')
+    const run = this.runs.get(runId)
+    const approval = run?.approvals.get(nativeRequestId)
+    if (!(run?.client && approval)) {
+      throw new RuntimeError('APPROVAL_NOT_FOUND', 'No approval request for run')
+    }
+    if (approval.responding || approval.resolved) {
+      throw new RuntimeError('APPROVAL_NOT_PENDING', 'Approval is not pending')
+    }
+    if (!approval.allowedDecisions.includes(decision)) {
+      throw new RuntimeError('INVALID_INPUT', 'Decision is not allowed')
+    }
+    approval.responding = true
+    const confirmation = deferred()
+    approval.confirmation = confirmation
+    const uncertain = () => new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Approval response was not confirmed')
+    const timer = setTimeout(() => confirmation.reject(uncertain()), this.options.requestTimeoutMs ?? 15_000)
+    // Observe confirmation before writing: a very fast native resolution may arrive first.
+    const result = confirmation.promise.finally(() => clearTimeout(timer))
+    void run.client
+      .reply(
+        nativeRequestId,
+        parseProtocol(ApprovalResponseSchema, { decision: decision === 'approve' ? 'accept' : 'decline' })
+      )
+      .catch(() => confirmation.reject(uncertain()))
+    await result
   }
 
   dispose(): Promise<void> {
@@ -306,7 +362,7 @@ export class CodexRuntime implements RuntimeAdapter {
 
   private route(client: JsonRpcClient, frame: Frame): void {
     if (frame.kind === 'server-request') {
-      this.rejectRequest(client, frame)
+      this.handleRequest(client, frame)
       return
     }
     if (
@@ -326,6 +382,10 @@ export class CodexRuntime implements RuntimeAdapter {
       return
     }
     const method = frame.method
+    if (method === 'serverRequest/resolved') {
+      this.resolveRequest(run, frame)
+      return
+    }
     if (
       ![
         'turn/started',
@@ -358,13 +418,106 @@ export class CodexRuntime implements RuntimeAdapter {
     this.enqueue(run, { bytes: Buffer.byteLength(JSON.stringify(frame)), frame })
   }
 
-  private rejectRequest(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
-    const supported =
-      frame.method === 'item/commandExecution/requestApproval' || frame.method === 'item/fileChange/requestApproval'
-    const reply = supported
-      ? client.reply(frame.id, { decision: 'decline' })
-      : client.replyError(frame.id, -32601, 'Unsupported server request')
-    void reply.catch(() => client.close())
+  private handleRequest(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
+    if (
+      frame.method === 'item/commandExecution/requestApproval' ||
+      frame.method === 'item/fileChange/requestApproval'
+    ) {
+      this.requestApproval(client, frame)
+      return
+    }
+    let result: Json | undefined
+    switch (frame.method) {
+      case 'item/tool/requestUserInput':
+        result = parseProtocol(EmptyAnswersSchema, { answers: {} })
+        break
+      case 'mcpServer/elicitation/request':
+        result = parseProtocol(DeclineElicitationSchema, { _meta: null, action: 'decline', content: null })
+        break
+      case 'item/permissions/requestApproval':
+        result = parseProtocol(NoPermissionsSchema, { permissions: {}, scope: 'turn' })
+        break
+    }
+    if (result !== undefined) {
+      void client.reply(frame.id, result).catch(() => client.close())
+      return
+    }
+    const params = frame.params
+    const threadId = params && typeof params === 'object' && !Array.isArray(params) ? params.threadId : undefined
+    const run = typeof threadId === 'string' ? this.threads.get(threadId) : undefined
+    void client.replyError(frame.id, -32601, 'Unsupported server request').then(
+      () => {
+        if (run && run.client === client && !run.finished) {
+          this.fail(run, new RuntimeError('UNSUPPORTED_REQUEST', 'Unsupported native request'))
+        } else {
+          void client.close()
+        }
+      },
+      () => client.close()
+    )
+  }
+
+  private resolveRequest(run: ActiveRun, frame: Notification): void {
+    const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
+    const approval = run.approvals.get(requestId)
+    if (!approval || approval.resolved) {
+      return
+    }
+    approval.resolved = true
+    this.enqueue(run, { bytes: Buffer.byteLength(JSON.stringify(frame)), frame })
+  }
+
+  private requestApproval(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
+    const command = frame.method === 'item/commandExecution/requestApproval'
+    const params = parseProtocol(command ? CommandApprovalSchema : FileApprovalSchema, frame.params)
+    const run = this.threads.get(params.threadId)
+    if (
+      !run ||
+      run.client !== client ||
+      run.finished ||
+      run.nativeEnded ||
+      (run.turnId && run.turnId !== params.turnId)
+    ) {
+      void client
+        .reply(frame.id, parseProtocol(ApprovalResponseSchema, { decision: 'decline' }))
+        .catch(() => client.close())
+      return
+    }
+    if (run.approvals.has(frame.id)) {
+      this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native approval request'))
+      return
+    }
+    this.bind(run, params.turnId)
+    const available = params.availableDecisions
+    const allowedDecisions: ApprovalDecision[] = []
+    if (!available || available.includes('accept')) {
+      allowedDecisions.push('approve')
+    }
+    if (!available || available.includes('decline')) {
+      allowedDecisions.push('deny')
+    }
+    if (allowedDecisions.length === 0) {
+      void client.replyError(frame.id, -32601, 'No supported approval decision').then(
+        () => this.fail(run, new RuntimeError('UNSUPPORTED_APPROVAL', 'No supported approval decision')),
+        () => client.close()
+      )
+      return
+    }
+    run.approvals.set(frame.id, { allowedDecisions, resolved: false, responding: false })
+    const detail = JSON.parse(JSON.stringify(params)) as JsonObject
+    this.enqueue(run, {
+      bytes: Buffer.byteLength(JSON.stringify(frame)),
+      notice: {
+        kind: 'approval',
+        request: { allowedDecisions, detail, kind: command ? 'command' : 'file-change', nativeRequestId: frame.id }
+      }
+    })
+  }
+
+  private sendCancellation(run: ActiveRun): void {
+    if (run.cancelRequested && run.turnId && run.cancellation) {
+      void this.interrupt(run).then(run.cancellation.resolve, run.cancellation.reject)
+    }
   }
 
   private bind(run: ActiveRun, turnId: string): void {
@@ -372,9 +525,7 @@ export class CodexRuntime implements RuntimeAdapter {
       run.turnId = turnId
       this.enqueue(run, { bytes: turnId.length, notice: { kind: 'started', nativeTurnId: turnId } })
     }
-    if (run.cancelRequested) {
-      void this.interrupt(run).catch(() => {})
-    }
+    this.sendCancellation(run)
   }
 
   private interrupt(run: ActiveRun): Promise<void> {
@@ -382,6 +533,12 @@ export class CodexRuntime implements RuntimeAdapter {
       run.interrupt = run.client
         .request('turn/interrupt', { threadId: run.threadId, turnId: run.turnId })
         .then(() => {})
+        .catch((cause: unknown) => {
+          if (cause instanceof RuntimeError && cause.code === 'RPC_TIMEOUT') {
+            throw new RuntimeError('CANCEL_TIMEOUT', 'Cancellation request timed out', { cause })
+          }
+          throw cause
+        })
     }
     return run.interrupt ?? Promise.resolve()
   }
@@ -484,6 +641,12 @@ export class CodexRuntime implements RuntimeAdapter {
   }
 
   private async project(run: ActiveRun, frame: Notification): Promise<void> {
+    if (frame.method === 'serverRequest/resolved') {
+      const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
+      await run.emit({ kind: 'approval-resolved', nativeRequestId: requestId })
+      run.approvals.get(requestId)?.confirmation?.resolve()
+      return
+    }
     if (frame.method !== 'turn/completed') {
       for (const notice of run.mapper.accept(frame.method, frame.params)) {
         await run.emit(notice)
@@ -504,6 +667,13 @@ export class CodexRuntime implements RuntimeAdapter {
 
   private complete(run: ActiveRun, outcome: AdapterOutcome): void {
     run.finished = true
+    run.cancellation?.resolve()
+    for (const approval of run.approvals.values()) {
+      approval.confirmation?.reject(
+        new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Run ended before approval confirmation')
+      )
+    }
+    run.approvals.clear()
     this.runs.delete(run.runId)
     this.threads.delete(run.threadId)
     run.resolve(outcome)

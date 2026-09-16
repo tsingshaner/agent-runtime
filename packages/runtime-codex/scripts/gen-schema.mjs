@@ -33,6 +33,9 @@ const roots = [
     'CommandExecutionRequestApprovalResponse',
     'FileChangeRequestApprovalParams',
     'FileChangeRequestApprovalResponse',
+    'ToolRequestUserInputResponse',
+    'McpServerElicitationRequestResponse',
+    'PermissionsRequestApprovalResponse',
     'ServerRequestResolvedNotification',
     'ErrorNotification'
   ].map((name) => `v2/${name}`)

@@ -220,6 +220,10 @@ importers:
       valibot:
         specifier: 1.5.0
         version: 1.5.0(typescript@7.0.2)
+    devDependencies:
+      drizzle-kit:
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4
 
   packages/runtime-codex: {}
 

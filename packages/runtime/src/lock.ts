@@ -20,20 +20,32 @@ export async function acquireDirectoryLock(dataDir: string): Promise<DirectoryLo
   try {
     handle = await open(path, 'wx', 0o600)
     await handle.writeFile(JSON.stringify({ hostname: hostname(), pid: process.pid, token }))
+    await handle.close()
+    handle = undefined
   } catch (error) {
-    await handle?.close().catch(() => undefined)
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+    if (!handle && (error as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new RuntimeError('DATA_DIR_BUSY', `Data directory is already owned: ${canonicalDir}`, {
         cause: error
       })
     }
+
+    const cleanupErrors: unknown[] = []
     if (handle) {
-      await unlink(path).catch(() => undefined)
+      await handle.close().catch((cleanupError: unknown) => cleanupErrors.push(cleanupError))
+      await unlink(path).catch((cleanupError: NodeJS.ErrnoException) => {
+        if (cleanupError.code !== 'ENOENT') {
+          cleanupErrors.push(cleanupError)
+        }
+      })
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError([error, ...cleanupErrors], 'Failed to acquire and clean up directory lock', {
+        cause: error
+      })
     }
     throw error
   }
 
-  await handle.close()
   let released = false
 
   return {

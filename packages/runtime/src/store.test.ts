@@ -6,8 +6,9 @@ import { join } from 'node:path'
 
 import { PGlite } from '@electric-sql/pglite'
 import { sql } from 'drizzle-orm'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 
+import { acquireDirectoryLock } from './lock'
 import { SessionStore } from './store'
 
 async function seedMigration(dataDir: string, name: string | null): Promise<void> {
@@ -21,6 +22,18 @@ async function seedMigration(dataDir: string, name: string | null): Promise<void
   } finally {
     await client.close()
   }
+}
+
+async function tryAcquireDirectory(dataDir: string): Promise<{ error: unknown } | { lock: unknown }> {
+  const result = await acquireDirectoryLock(dataDir).then(
+    (lock) => ({ lock }),
+    (error: unknown) => ({ error })
+  )
+
+  if ('lock' in result) {
+    await result.lock.release()
+  }
+  return result
 }
 
 describe('SessionStore ownership', () => {
@@ -110,6 +123,25 @@ describe('SessionStore ownership', () => {
     }
   })
 
+  test('retains ownership when database shutdown rejects', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'runtime-store-'))
+    const store = await SessionStore.open(dir)
+    const shutdownError = new Error('injected database shutdown failure')
+    const realClose = PGlite.prototype.close
+    const closeSpy = vi.spyOn(PGlite.prototype, 'close').mockImplementationOnce(async function (this: PGlite) {
+      await realClose.call(this)
+      throw shutdownError
+    })
+
+    try {
+      await expect(store.close()).rejects.toBe(shutdownError)
+      await expect(tryAcquireDirectory(dir)).resolves.toMatchObject({ error: { code: 'DATA_DIR_BUSY' } })
+    } finally {
+      closeSpy.mockRestore()
+      await rm(dir, { force: true, recursive: true })
+    }
+  })
+
   test('reopens a migrated database', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'runtime-store-'))
     const first = await SessionStore.open(dir)
@@ -155,6 +187,41 @@ describe('SessionStore migrations', () => {
 
       await expect(SessionStore.open(dir)).rejects.toMatchObject({ code: 'UNKNOWN_MIGRATION' })
       await expect(SessionStore.open(dir)).rejects.toMatchObject({ code: 'UNKNOWN_MIGRATION' })
+    } finally {
+      await store.close()
+      await rm(dir, { force: true, recursive: true })
+    }
+  })
+
+  test('retains ownership and both errors when failed-open shutdown rejects', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'runtime-store-'))
+    const store = await SessionStore.open(dir)
+    const shutdownError = new Error('injected database shutdown failure')
+    const realClose = PGlite.prototype.close
+
+    try {
+      await store.close()
+      await seedMigration(dir, '20990101000000_future_schema')
+      const closeSpy = vi.spyOn(PGlite.prototype, 'close').mockImplementationOnce(async function (this: PGlite) {
+        await realClose.call(this)
+        throw shutdownError
+      })
+
+      let openError: unknown
+      try {
+        await SessionStore.open(dir)
+      } catch (error) {
+        openError = error
+      } finally {
+        closeSpy.mockRestore()
+      }
+
+      expect(openError).toBeInstanceOf(AggregateError)
+      expect((openError as AggregateError).errors).toEqual([
+        expect.objectContaining({ code: 'UNKNOWN_MIGRATION' }),
+        shutdownError
+      ])
+      await expect(tryAcquireDirectory(dir)).resolves.toMatchObject({ error: { code: 'DATA_DIR_BUSY' } })
     } finally {
       await store.close()
       await rm(dir, { force: true, recursive: true })

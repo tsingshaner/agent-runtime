@@ -54,8 +54,22 @@ export class SessionStore {
       await migrate(db, { migrationsFolder })
       return new SessionStore(client, lock, db)
     } catch (error) {
-      await client?.close().catch(() => undefined)
-      await lock.release().catch(() => undefined)
+      if (client) {
+        try {
+          await client.close()
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], 'Failed to open store and shut down PGlite', {
+            cause: error
+          })
+        }
+      }
+      try {
+        await lock.release()
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Failed to open store and release ownership', {
+          cause: error
+        })
+      }
       throw error
     }
   }
@@ -66,10 +80,7 @@ export class SessionStore {
   }
 
   private async closeOwnedResources(): Promise<void> {
-    try {
-      await this.client.close()
-    } finally {
-      await this.lock.release()
-    }
+    await this.client.close()
+    await this.lock.release()
   }
 }

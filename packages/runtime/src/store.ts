@@ -1,28 +1,32 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { EventType } from '@ag-ui/core'
 import { PGlite } from '@electric-sql/pglite'
-import { and, defineRelations, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm'
+import { and, asc, defineRelations, desc, eq, getTableColumns, gt, inArray, sql } from 'drizzle-orm'
 import { readMigrationFiles } from 'drizzle-orm/migrator'
 import { drizzle, type PgliteDatabase } from 'drizzle-orm/pglite'
 import { migrate } from 'drizzle-orm/pglite/migrator'
 
+import { parseEvent, startedEvent, type TerminalOutcome, terminalEvent } from './ag-ui'
 import { RuntimeError } from './errors'
 import { acquireDirectoryLock, type DirectoryLock } from './lock'
 import * as schema from './schema'
-import { runs, sessions } from './schema'
+import { approvals, events, runs, sessions } from './schema'
+import { subscribeToRun } from './subscription'
 import {
   ArchivedSchema,
   type Cursor,
   CursorSchema,
   type InsertSessionInput,
   InsertSessionInputSchema,
+  PageInputSchema,
   parseInput,
   SessionFilterSchema,
   SessionIdSchema
 } from './validation'
 
-import type { Page, Session, SessionFilter } from './types'
+import type { AgUiEvent, EventEnvelope, Page, Run, Session, SessionFilter } from './types'
 
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url))
 const relations = defineRelations(schema)
@@ -37,7 +41,7 @@ function toSession(row: typeof sessions.$inferSelect & { activeRunId: string | n
   }
 }
 
-function encodeCursor(session: Session): string {
+function encodeCursor(session: Pick<Session, 'createdAt' | 'id'>): string {
   return Buffer.from(JSON.stringify({ createdAt: session.createdAt, id: session.id })).toString('base64url')
 }
 
@@ -50,6 +54,40 @@ function decodeCursor(encoded: string | undefined): Cursor | undefined {
   } catch {
     throw new RuntimeError('INVALID_INPUT', 'Invalid input')
   }
+}
+
+type Transaction = Parameters<Parameters<PgliteDatabase<typeof relations>['transaction']>[0]>[0]
+
+function toRun(row: typeof runs.$inferSelect): Run {
+  return {
+    ...row,
+    createdAt: new Date(row.createdAt).toISOString(),
+    endedAt: row.endedAt === null ? null : new Date(row.endedAt).toISOString()
+  }
+}
+
+async function requireRun(db: Transaction | PgliteDatabase<typeof relations>, id: string): Promise<Run> {
+  const [row] = await db
+    .select()
+    .from(runs)
+    .where(eq(runs.id, parseInput(SessionIdSchema, id)))
+  if (!row) {
+    throw new RuntimeError('RUN_NOT_FOUND', `Run not found: ${id}`)
+  }
+  return toRun(row)
+}
+
+async function persistEvent(tx: Transaction, runId: string, event: AgUiEvent): Promise<EventEnvelope> {
+  const [row] = await tx
+    .update(runs)
+    .set({ lastSequence: sql`${runs.lastSequence} + 1` })
+    .where(eq(runs.id, runId))
+    .returning()
+  if (!row) {
+    throw new RuntimeError('RUN_NOT_FOUND', `Run not found: ${runId}`)
+  }
+  await tx.insert(events).values({ event, runId, sequence: row.lastSequence })
+  return { event, runId, sequence: row.lastSequence, sessionId: row.sessionId }
 }
 
 async function rejectUnknownMigrations(client: PGlite): Promise<void> {
@@ -72,6 +110,7 @@ async function rejectUnknownMigrations(client: PGlite): Promise<void> {
 export class SessionStore {
   readonly db: PgliteDatabase<typeof relations>
   private closePromise?: Promise<void>
+  private readonly listeners = new Map<string, Set<() => void>>()
 
   private constructor(
     private readonly client: PGlite,
@@ -188,6 +227,189 @@ export class SessionStore {
         .set({ archived: validatedArchived, updatedAt: sql`now()` })
         .where(eq(sessions.id, validatedId))
     })
+  }
+
+  async beginRun(sessionId: string, runId: string): Promise<Run> {
+    parseInput(SessionIdSchema, sessionId)
+    parseInput(SessionIdSchema, runId)
+    const run = await this.db.transaction(async (tx) => {
+      const [session] = await tx.select().from(sessions).where(eq(sessions.id, sessionId))
+      if (!session) {
+        throw new RuntimeError('SESSION_NOT_FOUND', `Session not found: ${sessionId}`)
+      }
+      if (session.archived) {
+        throw new RuntimeError('SESSION_ARCHIVED', `Session is archived: ${sessionId}`)
+      }
+      const [inserted] = await tx
+        .insert(runs)
+        .values({ id: runId, sessionId, status: 'starting' })
+        .onConflictDoNothing({
+          target: runs.sessionId,
+          where: sql`${runs.status} in ('starting', 'running', 'waiting_approval', 'cancelling')`
+        })
+        .returning()
+      if (!inserted) {
+        throw new RuntimeError('SESSION_BUSY', `Session has an active run: ${sessionId}`)
+      }
+      await persistEvent(tx, runId, startedEvent(sessionId, runId))
+      await tx.update(sessions).set({ updatedAt: sql`now()` }).where(eq(sessions.id, sessionId))
+      return requireRun(tx, runId)
+    })
+    this.notifyRunChange(runId)
+    return run
+  }
+
+  getRun(id: string): Promise<Run> {
+    return requireRun(this.db, id)
+  }
+
+  async listRuns(sessionId: string, page: { limit?: number; cursor?: string } = {}): Promise<Page<Run>> {
+    const validated = parseInput(PageInputSchema, page)
+    const cursor = decodeCursor(validated.cursor)
+    await this.getSession(sessionId)
+    const rows = await this.db
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.sessionId, sessionId),
+          cursor === undefined
+            ? undefined
+            : sql`(${runs.createdAt}, ${runs.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id})`
+        )
+      )
+      .orderBy(desc(runs.createdAt), desc(runs.id))
+      .limit(validated.limit + 1)
+    const items = rows.slice(0, validated.limit).map(toRun)
+    return { items, nextCursor: rows.length > validated.limit ? encodeCursor(items.at(-1) as Run) : null }
+  }
+
+  async setNativeTurn(runId: string, nativeTurnId: string): Promise<void> {
+    parseInput(SessionIdSchema, nativeTurnId)
+    await this.db.transaction(async (tx) => {
+      await requireRun(tx, runId)
+      await tx
+        .update(runs)
+        .set({
+          nativeTurnId,
+          status: sql`case when ${runs.status} = 'starting' then 'running' else ${runs.status} end`
+        })
+        .where(and(eq(runs.id, runId), inArray(runs.status, activeStatuses)))
+    })
+    this.notifyRunChange(runId)
+  }
+
+  async appendEvent(runId: string, event: AgUiEvent): Promise<EventEnvelope> {
+    const validated = parseEvent(event)
+    if ([EventType.RUN_STARTED, EventType.RUN_FINISHED, EventType.RUN_ERROR].some((type) => type === validated.type)) {
+      throw new RuntimeError('INVALID_INPUT', 'Run lifecycle events are managed by the store')
+    }
+    const envelope = await this.db.transaction(async (tx) => {
+      const run = await requireRun(tx, runId)
+      if (!activeStatuses.some((status) => status === run.status)) {
+        throw new RuntimeError('RUN_TERMINAL', `Run is terminal: ${runId}`)
+      }
+      return persistEvent(tx, runId, validated)
+    })
+    this.notifyRunChange(runId)
+    return envelope
+  }
+
+  async finishRun(runId: string, outcome: TerminalOutcome): Promise<void> {
+    const changed = await this.db.transaction(async (tx) => {
+      const run = await requireRun(tx, runId)
+      const event = terminalEvent(run.sessionId, runId, outcome)
+      const [updated] = await tx
+        .update(runs)
+        .set({ endedAt: sql`now()`, error: outcome.error ?? null, status: outcome.status })
+        .where(and(eq(runs.id, runId), inArray(runs.status, activeStatuses)))
+        .returning()
+      if (!updated) {
+        return false
+      }
+      const expired = await tx
+        .update(approvals)
+        .set({ status: 'expired' })
+        .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'responding'])))
+        .returning()
+      for (const approval of expired) {
+        await persistEvent(
+          tx,
+          runId,
+          parseEvent({
+            name: 'runtime.approval.resolved',
+            type: EventType.CUSTOM,
+            value: { approvalId: approval.id, decision: approval.decision, status: 'expired' }
+          })
+        )
+      }
+      await persistEvent(tx, runId, event)
+      return true
+    })
+    if (changed) {
+      this.notifyRunChange(runId)
+    }
+  }
+
+  readEventPage(runId: string, afterSequence: number, limit = 128): Promise<EventEnvelope[]> {
+    return this.db.transaction(async (tx) => {
+      const run = await requireRun(tx, runId)
+      if (run.eventsCleared) {
+        throw new RuntimeError('EVENTS_CLEARED', `Events cleared: ${runId}`)
+      }
+      if (!Number.isSafeInteger(afterSequence) || afterSequence < 0 || !Number.isSafeInteger(limit) || limit < 1) {
+        throw new RuntimeError('INVALID_INPUT', 'Invalid event page')
+      }
+      const rows = await tx
+        .select()
+        .from(events)
+        .where(and(eq(events.runId, runId), gt(events.sequence, afterSequence)))
+        .orderBy(asc(events.sequence))
+        .limit(limit)
+      return rows.map((row) => ({
+        event: parseEvent(row.event),
+        runId,
+        sequence: row.sequence,
+        sessionId: run.sessionId
+      }))
+    })
+  }
+
+  async clearRunEvents(runId: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const run = await requireRun(tx, runId)
+      if (activeStatuses.some((status) => status === run.status)) {
+        throw new RuntimeError('RUN_ACTIVE', `Run is active: ${runId}`)
+      }
+      await tx.update(runs).set({ eventsCleared: true }).where(eq(runs.id, runId))
+      await tx.delete(events).where(eq(events.runId, runId))
+    })
+    this.notifyRunChange(runId)
+  }
+
+  onRunChange(runId: string, listener: () => void): () => void {
+    let listeners = this.listeners.get(runId)
+    if (!listeners) {
+      listeners = new Set()
+      this.listeners.set(runId, listeners)
+    }
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0) {
+        this.listeners.delete(runId)
+      }
+    }
+  }
+
+  private notifyRunChange(runId: string): void {
+    for (const listener of this.listeners.get(runId) ?? []) {
+      listener()
+    }
+  }
+
+  subscribe(runId: string, options?: { afterSequence?: number; signal?: AbortSignal }): AsyncIterable<EventEnvelope> {
+    return subscribeToRun(this, runId, options)
   }
 
   close(): Promise<void> {

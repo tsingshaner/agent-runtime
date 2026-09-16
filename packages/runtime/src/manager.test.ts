@@ -154,8 +154,11 @@ describe('RuntimeManager', () => {
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
     const session = await create()
 
-    await expect(create()).rejects.toThrow()
+    await expect(create()).rejects.toMatchObject({ code: 'STORAGE_ERROR' })
     expect(adapter.created).toHaveLength(2)
+    await expect(manager.listSessions()).rejects.toMatchObject({ code: 'STORAGE_ERROR' })
+    await expect(manager.dispose()).rejects.toBeInstanceOf(AggregateError)
+    manager = await RuntimeManager.open({ dataDir: dir, runtimes: [new ManualAdapter()] })
     expect((await manager.listSessions()).items).toEqual([session])
     expect(await manager.resumeSession(session.id)).toEqual(session)
   })

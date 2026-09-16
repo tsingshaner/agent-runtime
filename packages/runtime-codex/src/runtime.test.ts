@@ -379,4 +379,67 @@ describe('CodexRuntime', () => {
     await runtime.dispose()
     await expect(runtime.createSession({ cwd })).rejects.toMatchObject({ code: 'DISPOSED' })
   })
+  test('fails both sessions on process loss and executes an explicit run in a fresh process', async () => {
+    const p = await peer()
+    const first = await p.create('first')
+    const second = await p.create('second')
+    const one = p.runtime.execute(first, input, async () => {})
+    const firstStart = await p.request('turn/start')
+    await p.send({ id: firstStart.id, result: { turn: turn('turn-one') } })
+    const two = p.runtime.execute(second, { ...input, runId: 'run-two' }, async () => {})
+    const secondStart = await p.request('turn/start')
+    await p.send({ id: secondStart.id, result: { turn: turn('turn-two') } })
+    await p.exit()
+    expect(await Promise.all([one, two])).toEqual([
+      expect.objectContaining({ error: expect.objectContaining({ code: 'PROCESS_EXITED' }), status: 'failed' }),
+      expect.objectContaining({ error: expect.objectContaining({ code: 'PROCESS_EXITED' }), status: 'failed' })
+    ])
+    const notices: AdapterNotice[] = []
+    const next = p.runtime.execute(first, { ...input, runId: 'new-run' }, (notice) => {
+      notices.push(notice)
+      return Promise.resolve()
+    })
+    await p.handshake()
+    const resume = await p.request('thread/resume')
+    expect(resume.params.threadId).toBe('first')
+    await p.send({ id: resume.id, result: { cwd, model: 'model-test', thread: { id: 'first' } } })
+    const start = await p.request('turn/start')
+    await p.send({ id: start.id, result: { turn: turn('new-turn') } })
+    await p.send(delta('first', 'turn-one', 'stale'))
+    await p.send(delta('first', 'new-turn', 'fresh'))
+    await p.send(done('first', 'new-turn'))
+    expect(await next).toEqual({ status: 'succeeded' })
+    expect(notices.filter((notice) => notice.kind === 'event' && notice.event.type === 'TEXT_MESSAGE_CONTENT')).toEqual(
+      [{ event: { delta: 'fresh', messageId: 'new-run:message', type: 'TEXT_MESSAGE_CONTENT' }, kind: 'event' }]
+    )
+    expect(p.connections()).toBe(2)
+  })
+
+  test('disposes during initialization without restarting an accepted control operation', async () => {
+    const p = await peer()
+    const creating = p.runtime.createSession({ cwd }).catch((error: unknown) => error)
+    await p.request('initialize')
+    await p.runtime.dispose()
+    expect(await creating).toMatchObject({ code: 'PROCESS_EXITED' })
+    await expect(p.runtime.createSession({ cwd })).rejects.toMatchObject({ code: 'DISPOSED' })
+    expect(p.connections()).toBe(1)
+  })
+
+  test('reports process loss when disposal wins before native startup', async () => {
+    const p = await peer()
+    const execution = p.runtime.execute({ cwd, nativeSessionId: 'saved', options: {} }, input, async () => {})
+    await p.runtime.dispose()
+    expect(await execution).toMatchObject({ error: { code: 'PROCESS_EXITED' }, status: 'failed' })
+    expect(p.connections()).toBe(0)
+  })
+  test('validates a directly executed saved session before starting a process', async () => {
+    const p = await peer()
+    const outcome = await p.runtime.execute(
+      { cwd: fakePath, nativeSessionId: 'saved', options: {} },
+      input,
+      async () => {}
+    )
+    expect(outcome).toMatchObject({ error: { code: 'INVALID_INPUT' }, status: 'failed' })
+    expect(p.connections()).toBe(0)
+  })
 })

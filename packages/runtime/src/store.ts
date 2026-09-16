@@ -131,6 +131,7 @@ async function rejectUnknownMigrations(client: PGlite): Promise<void> {
 export class SessionStore {
   readonly db: PgliteDatabase<typeof relations>
   private closePromise?: Promise<void>
+  private failure: RuntimeError | null = null
   private readonly listeners = new Map<string, Set<() => void>>()
 
   private constructor(
@@ -169,6 +170,34 @@ export class SessionStore {
         })
       }
       throw error
+    }
+  }
+
+  async recoverInterrupted(): Promise<void> {
+    const unfinished = await this.db.select({ id: runs.id }).from(runs).where(inArray(runs.status, activeStatuses))
+    for (const { id } of unfinished) {
+      await this.finishRun(id, {
+        error: { code: 'INTERRUPTED', message: 'Run interrupted by restart' },
+        status: 'interrupted'
+      })
+    }
+  }
+
+  fail(error: RuntimeError): void {
+    this.failure ??= error
+    for (const listeners of this.listeners.values()) {
+      for (const listener of listeners) {
+        listener()
+      }
+    }
+  }
+
+  assertAvailable(): void {
+    if (this.failure) {
+      throw this.failure
+    }
+    if (this.closePromise) {
+      throw new RuntimeError('DISPOSED', 'Store is closing or disposed')
     }
   }
 
@@ -569,6 +598,8 @@ export class SessionStore {
   }
 
   close(): Promise<void> {
+    this.fail(new RuntimeError('DISPOSED', 'Store is closing or disposed'))
+    this.listeners.clear()
     this.closePromise ??= this.closeOwnedResources()
     return this.closePromise
   }

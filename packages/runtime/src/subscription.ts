@@ -3,7 +3,7 @@ import { RuntimeError } from './errors'
 import type { SessionStore } from './store'
 import type { EventEnvelope } from './types'
 
-type EventSource = Pick<SessionStore, 'getRun' | 'readEventPage' | 'onRunChange'>
+type EventSource = Pick<SessionStore, 'getRun' | 'readEventPage' | 'onRunChange' | 'assertAvailable'>
 
 export function subscribeToRun(
   store: EventSource,
@@ -20,18 +20,19 @@ export function subscribeToRun(
         wake?.()
       }
       const { signal } = options
-      // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Keep the cursor, wakeup, and cleanup ordering together in this iterator.
+      // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Keep the cursor, notification, and cleanup ordering together in this iterator.
       const generator = (async function* () {
         if (stopped || signal?.aborted) {
           return
         }
-        const unlisten = store.onRunChange(runId, () => {
+        const unsubscribe = store.onRunChange(runId, () => {
           revision++
           wake?.()
         })
         signal?.addEventListener('abort', stop, { once: true })
         let sequence = options.afterSequence === undefined ? 0 : options.afterSequence
         try {
+          store.assertAvailable()
           const initial = await store.getRun(runId)
           if (initial.eventsCleared) {
             throw new RuntimeError('EVENTS_CLEARED', `Events cleared: ${runId}`)
@@ -40,18 +41,21 @@ export function subscribeToRun(
             throw new RuntimeError('INVALID_INPUT', 'Invalid subscription cursor')
           }
           while (!(stopped || signal?.aborted)) {
+            store.assertAvailable()
             const observed = revision
             const page = await store.readEventPage(runId, sequence)
             for (const event of page) {
               if (stopped || signal?.aborted) {
                 return
               }
+              store.assertAvailable()
               if ((await store.getRun(runId)).eventsCleared) {
                 throw new RuntimeError('EVENTS_CLEARED', `Events cleared: ${runId}`)
               }
               if (stopped || signal?.aborted) {
                 return
               }
+              store.assertAvailable()
               yield event
               sequence = event.sequence
             }
@@ -79,8 +83,11 @@ export function subscribeToRun(
               wake = undefined
             }
           }
+        } catch (error) {
+          store.assertAvailable()
+          throw error
         } finally {
-          unlisten()
+          unsubscribe()
           signal?.removeEventListener('abort', stop)
           wake = undefined
         }

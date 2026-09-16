@@ -129,6 +129,7 @@ export class CodexRuntime implements RuntimeAdapter {
     const client = await this.start()
     const params = { cwd, ...options, approvalsReviewer: 'user', ephemeral: false } satisfies ThreadStartParams
     const result = parseProtocol(ThreadResponseSchema, await client.request('thread/start', params))
+    this.checkClient(client)
     this.loaded.set(result.thread.id, Promise.resolve())
     return { cwd, nativeSessionId: result.thread.id, options }
   }
@@ -151,6 +152,7 @@ export class CodexRuntime implements RuntimeAdapter {
         approvalsReviewer: 'user'
       } satisfies ThreadResumeParams
       const result = parseProtocol(ThreadResponseSchema, await client.request('thread/resume', params))
+      this.checkClient(client)
       if (result.thread.id !== nativeSessionId) {
         throw new RuntimeError('PROTOCOL_ERROR', 'Resumed thread identity does not match')
       }
@@ -247,7 +249,7 @@ export class CodexRuntime implements RuntimeAdapter {
       this.closing = (async () => {
         await this.client?.close()
         for (const run of this.runs.values()) {
-          this.fail(run, new RuntimeError('DISPOSED', 'Codex runtime disposed'))
+          this.fail(run, new RuntimeError('PROCESS_EXITED', 'Codex runtime disposed'))
         }
         this.loaded.clear()
       })()
@@ -258,6 +260,12 @@ export class CodexRuntime implements RuntimeAdapter {
   private checkOpen(): void {
     if (this.disposed) {
       throw new RuntimeError('DISPOSED', 'Codex runtime disposed')
+    }
+  }
+  private checkClient(client: JsonRpcClient): void {
+    this.checkOpen()
+    if (this.client !== client) {
+      throw new RuntimeError('PROCESS_EXITED', 'App-server generation ended')
     }
   }
   private sessionOptions(value: unknown) {
@@ -290,7 +298,11 @@ export class CodexRuntime implements RuntimeAdapter {
         shutdownTimeoutMs: this.options.shutdownTimeoutMs
       })
       this.client = client
-      client.onFrame((frame) => this.route(client, frame))
+      client.onFrame((frame) => {
+        if (this.client === client) {
+          this.route(client, frame)
+        }
+      })
       client.onExit((error) => {
         if (this.client === client) {
           this.client = undefined
@@ -314,7 +326,7 @@ export class CodexRuntime implements RuntimeAdapter {
           } satisfies InitializeParams
           await client.request('initialize', params)
           await client.notify('initialized', {})
-          this.checkOpen()
+          this.checkClient(client)
           return client
         } catch (error) {
           await client.close()
@@ -332,7 +344,10 @@ export class CodexRuntime implements RuntimeAdapter {
       if (run.finished) {
         return
       }
-      const client = await this.start()
+      const client = this.client
+      if (!client) {
+        throw new RuntimeError('PROCESS_EXITED', 'App-server generation ended before turn start')
+      }
       run.client = client
       const params = {
         // biome-ignore lint/style/useNamingConvention: Native protocol field.

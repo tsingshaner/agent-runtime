@@ -114,6 +114,7 @@ describe('run subscriptions', () => {
     const release = barrier()
     let emptyRead = false
     const source = {
+      assertAvailable: store.assertAvailable.bind(store),
       getRun: async (runId: string) => {
         const run = await store.getRun(runId)
         if (emptyRead) {
@@ -145,6 +146,7 @@ describe('run subscriptions', () => {
     const entered = barrier()
     const release = barrier()
     const source = {
+      assertAvailable: store.assertAvailable.bind(store),
       getRun: store.getRun.bind(store),
       onRunChange: store.onRunChange.bind(store),
       readEventPage: async (runId: string, sequence: number) => {
@@ -175,6 +177,7 @@ describe('run subscriptions', () => {
       let emptyRead = false
       let listenerCount = 0
       const source = {
+        assertAvailable: store.assertAvailable.bind(store),
         getRun: async (runId: string) => {
           const run = await store.getRun(runId)
           // The next event-loop turn starts after the iterator installs its wait.
@@ -185,10 +188,10 @@ describe('run subscriptions', () => {
         },
         onRunChange: (runId: string, listener: () => void) => {
           listenerCount++
-          const unlisten = store.onRunChange(runId, listener)
+          const unsubscribe = store.onRunChange(runId, listener)
           return () => {
             listenerCount--
-            unlisten()
+            unsubscribe()
           }
         },
         readEventPage: async (runId: string, sequence: number) => {
@@ -230,6 +233,15 @@ describe('run subscriptions', () => {
     release.resolve()
 
     await Promise.all([holding, clearing, assertion])
+  })
+
+  test('reports disposal when closed while paused inside a replay page', async () => {
+    await store.beginRun('s1', 'r1')
+    await store.finishRun('r1', { status: 'succeeded' })
+    const iterator = store.subscribe('r1')[Symbol.asyncIterator]()
+    expect((await iterator.next()).value?.sequence).toBe(1)
+    await store.close()
+    await expect(iterator.next()).rejects.toMatchObject({ code: 'DISPOSED' })
   })
 
   test('ends immediately for an already aborted signal', async () => {

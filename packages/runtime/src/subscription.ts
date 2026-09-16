@@ -63,6 +63,7 @@ export function subscribeToRun(
               continue
             }
             const run = await store.getRun(runId)
+            store.assertAvailable()
             if (run.eventsCleared) {
               throw new RuntimeError('EVENTS_CLEARED', `Events cleared: ${runId}`)
             }

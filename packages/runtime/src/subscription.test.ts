@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { EventType } from '@ag-ui/core'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
+import { RuntimeError } from './errors'
 import { SessionStore } from './store'
 import { subscribeToRun } from './subscription'
 
@@ -234,6 +235,54 @@ describe('run subscriptions', () => {
 
     await Promise.all([holding, clearing, assertion])
   })
+
+  test.each(['storage failure', 'disposal'] as const)(
+    'rejects terminal completion when %s occurs during the final status read',
+    async (action) => {
+      await store.beginRun('s1', 'r1')
+      await store.finishRun('r1', { status: 'succeeded' })
+      const entered = barrier()
+      const release = barrier()
+      let emptyRead = false
+      const source = {
+        assertAvailable: store.assertAvailable.bind(store),
+        getRun: async (runId: string) => {
+          const run = await store.getRun(runId)
+          if (emptyRead) {
+            entered.resolve()
+            await release.promise
+          }
+          return run
+        },
+        onRunChange: store.onRunChange.bind(store),
+        readEventPage: async (runId: string, sequence: number) => {
+          const page = await store.readEventPage(runId, sequence)
+          emptyRead = page.length === 0
+          return page
+        }
+      }
+      const iterator = subscribeToRun(source, 'r1', { afterSequence: 2 })[Symbol.asyncIterator]()
+      const pending = iterator.next()
+      await entered.promise
+      const failure = new RuntimeError('STORAGE_ERROR', 'Write failed', { cause: new Error('Disk unavailable') })
+      try {
+        if (action === 'storage failure') {
+          store.fail(failure)
+        } else {
+          await store.close()
+        }
+        release.resolve()
+        if (action === 'storage failure') {
+          await expect(pending).rejects.toBe(failure)
+        } else {
+          await expect(pending).rejects.toMatchObject({ code: 'DISPOSED' })
+        }
+      } finally {
+        release.resolve()
+        await iterator.return?.()
+      }
+    }
+  )
 
   test('reports disposal when closed while paused inside a replay page', async () => {
     await store.beginRun('s1', 'r1')

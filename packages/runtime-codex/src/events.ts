@@ -1,0 +1,146 @@
+import { type AdapterNotice, type AdapterOutcome, parseEvent, RuntimeError } from '@qingshaner/runtime'
+
+import type { InferOutput } from 'valibot'
+
+import { DeltaSchema, ItemNotificationSchema, type ItemSchema, parseProtocol } from './protocol'
+
+type Item = InferOutput<typeof ItemSchema>
+function event(value: unknown): AdapterNotice {
+  return { event: parseEvent(value), kind: 'event' }
+}
+
+export class CodexEventMapper {
+  private readonly texts = new Map<string, { text: string; ended: boolean }>()
+  private readonly tools = new Set<string>()
+  private readonly completed = new Set<string>()
+
+  constructor(
+    private readonly sessionId: string,
+    private readonly runId: string
+  ) {}
+
+  accept(method: string, params: unknown): AdapterNotice[] {
+    if (method === 'item/agentMessage/delta') {
+      const { itemId, delta } = parseProtocol(DeltaSchema, params)
+      const output: AdapterNotice[] = []
+      const state = this.text(itemId, output)
+      if (!state.ended && delta) {
+        state.text += delta
+        output.push(event({ delta, messageId: this.id(itemId), type: 'TEXT_MESSAGE_CONTENT' }))
+      }
+      return output
+    }
+    if (method === 'item/commandExecution/outputDelta' || method === 'item/fileChange/outputDelta') {
+      const { itemId, delta } = parseProtocol(DeltaSchema, params)
+      return [
+        event({
+          name: 'codex.progress',
+          type: 'CUSTOM',
+          value: { delta, itemId, method, runId: this.runId, sessionId: this.sessionId }
+        })
+      ]
+    }
+    if (method !== 'item/started' && method !== 'item/completed') {
+      return []
+    }
+    const { item } = parseProtocol(ItemNotificationSchema, params)
+    if (this.completed.has(item.id)) {
+      return []
+    }
+    const complete = method === 'item/completed'
+    const output = this.item(item, complete)
+    if (complete) {
+      this.completed.add(item.id)
+    }
+    return output
+  }
+
+  finish(_outcome: AdapterOutcome): AdapterNotice[] {
+    const output: AdapterNotice[] = []
+    for (const [itemId, state] of this.texts) {
+      if (!state.ended) {
+        state.ended = true
+        output.push(event({ messageId: this.id(itemId), type: 'TEXT_MESSAGE_END' }))
+      }
+    }
+    return output
+  }
+
+  private item(item: Item, complete: boolean): AdapterNotice[] {
+    switch (item.type) {
+      case 'agentMessage':
+        return this.message(item, complete)
+      case 'mcpToolCall':
+        return this.tool(item, complete)
+      case 'commandExecution':
+      case 'fileChange':
+        return [
+          event({
+            name: item.type === 'commandExecution' ? 'codex.command' : 'codex.file-change',
+            type: 'CUSTOM',
+            value: { item, runId: this.runId, sessionId: this.sessionId, stage: complete ? 'completed' : 'started' }
+          })
+        ]
+      default:
+        return []
+    }
+  }
+
+  private message(item: Extract<Item, { type: 'agentMessage' }>, complete: boolean): AdapterNotice[] {
+    const output: AdapterNotice[] = []
+    const state = this.text(item.id, output)
+    if (!complete) {
+      return output
+    }
+    if (!item.text.startsWith(state.text)) {
+      throw new RuntimeError('PROJECTION_ERROR', 'Final message conflicts with streamed text')
+    }
+    const delta = item.text.slice(state.text.length)
+    if (delta) {
+      output.push(event({ delta, messageId: this.id(item.id), type: 'TEXT_MESSAGE_CONTENT' }))
+    }
+    state.text = item.text
+    state.ended = true
+    output.push(event({ messageId: this.id(item.id), type: 'TEXT_MESSAGE_END' }))
+    return output
+  }
+
+  private tool(item: Extract<Item, { type: 'mcpToolCall' }>, complete: boolean): AdapterNotice[] {
+    const output: AdapterNotice[] = []
+    const itemId = this.id(item.id)
+    if (!this.tools.has(item.id)) {
+      this.tools.add(item.id)
+      output.push(
+        event({ toolCallId: itemId, toolCallName: `${item.server}.${item.tool}`, type: 'TOOL_CALL_START' }),
+        event({ delta: JSON.stringify(item.arguments), toolCallId: itemId, type: 'TOOL_CALL_ARGS' }),
+        event({ toolCallId: itemId, type: 'TOOL_CALL_END' })
+      )
+    }
+    if (complete) {
+      output.push(
+        event({
+          content: JSON.stringify(item.error ? { error: item.error } : item.result),
+          messageId: `${itemId}:result`,
+          role: 'tool',
+          toolCallId: itemId,
+          type: 'TOOL_CALL_RESULT'
+        })
+      )
+    }
+    return output
+  }
+
+  private id(itemId: string): string {
+    return `${this.runId}:${itemId}`
+  }
+
+  private text(itemId: string, output: AdapterNotice[]) {
+    let state = this.texts.get(itemId)
+    if (!state) {
+      state = { ended: false, text: '' }
+      this.texts.set(itemId, state)
+      output.push(event({ messageId: this.id(itemId), role: 'assistant', type: 'TEXT_MESSAGE_START' }))
+    }
+    return state
+  }
+}

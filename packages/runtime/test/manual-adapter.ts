@@ -48,11 +48,18 @@ export class ManualAdapter implements RuntimeAdapter {
     this.confirmApprovals = true
   }
 
-  async createSession(input: { cwd: string; options?: JsonObject }): Promise<NativeSession> {
+  async createSession(input: {
+    cwd: string
+    model?: string
+    projectId?: string
+    options?: JsonObject
+  }): Promise<NativeSession> {
     const session = {
       cwd: await realpath(input.cwd),
+      model: input.model,
       nativeSessionId: `native-${this.created.length + 1}`,
-      options: input.options ?? { model: 'test-model' }
+      options: input.options ?? { model: 'test-model' },
+      projectId: input.projectId
     }
     this.created.push(session)
     return session

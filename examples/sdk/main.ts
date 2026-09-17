@@ -8,12 +8,20 @@ if (!model) {
 }
 const manager = await RuntimeManager.open({
   dataDir: './.agent-runtime',
-  runtimes: [new CodexRuntime({ model })]
+  runtimes: [new CodexRuntime()]
 })
 try {
+  try {
+    await manager.getProject('demo')
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'PROJECT_NOT_FOUND')) {
+      throw error
+    }
+    await manager.createProject({ id: 'demo', name: 'Demo', workingDirectories: [process.cwd()] })
+  }
   const session = process.env.SESSION_ID
     ? await manager.resumeSession(process.env.SESSION_ID)
-    : await manager.createSession({ cwd: process.cwd(), projectId: 'demo', runtime: 'codex' })
+    : await manager.createSession({ cwd: process.cwd(), model, projectId: 'demo', runtime: 'codex' })
   console.log({ sessionId: session.id })
   const { runId } = await manager.run(session.id, { text: 'Briefly describe this directory.' })
   for await (const envelope of manager.subscribe(runId)) {

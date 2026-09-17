@@ -8,11 +8,13 @@ import { CodexRuntime } from '@qingshaner/runtime-codex'
 
 const manager = await RuntimeManager.open({
   dataDir: './.agent-runtime',
-  runtimes: [new CodexRuntime({ model: 'your-model' })],
+  runtimes: [new CodexRuntime()],
 })
 try {
+  const project = await manager.createProject({ name: 'Demo', workingDirectories: [process.cwd()] })
   const session = await manager.createSession({
-    runtime: 'codex', projectId: 'demo', cwd: process.cwd(),
+    runtime: 'codex', projectId: project.id, cwd: process.cwd(), model: 'your-model',
+    options: { sandbox: 'read-only' },
   })
   const { runId } = await manager.run(session.id, { text: 'Say hello without tools.' })
   for await (const envelope of manager.subscribe(runId)) {
@@ -35,6 +37,7 @@ try {
 
 | 操作 | 语义 |
 | --- | --- |
+| `createProject` / `getProject` / `listProjects` / `updateProject` | 持久化项目身份、名称和工作目录；目录更新不改变会话归属 |
 | `createSession` / `getSession` / `listSessions` | 创建、读取、按项目/runtime/归档与游标分页；仅索引成功保存的 SDK 会话 |
 | `resumeSession` | 使用公共 ID 续接其固定适配器的原生会话；不会自动执行输入 |
 | `archiveSession` / `unarchiveSession` | 归档标记；有活跃运行时不能归档，归档会话不能运行 |
@@ -51,3 +54,8 @@ try {
 事件不自动过期，永久占用磁盘；数据可能包含敏感提示词、输出和审批信息。妥善控制目录权限与备份，不提交 `.agent-runtime` 或凭据。
 一个本地数据目录只允许一个 Manager。`.manager.lock` 遗留后必须确认原进程及数据库已停止并备份，才可人工移除；不能在活跃或关闭状态不明时抢锁，不支持网络文件系统。
 存储失效以 STORAGE_ERROR 停止服务，关闭不完全以 AggregateError 报告；无法确认数据库关闭时保留锁。
+
+创建会话必须指定已存在的 `projectId` 和非空 `model`；`options` 仅放适配器专属配置，类型从注册的适配器推导。
+目录绑定是项目元数据，不是访问沙箱；会话创建仍单独校验实际 `cwd`。更新项目目录不会重写既有会话的原生工作目录。
+旧库按原 `projectId` 回填项目并保留会话、原生 ID、归档和历史；已存的 `options.model` 提升为公共字段。
+未保存模型的旧会话以 `model: null` 表示，续接仍沿用原适配器的既有配置，不凭空选择新模型。

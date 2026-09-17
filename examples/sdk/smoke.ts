@@ -24,7 +24,8 @@ if (process.env.RUN_CODEX_SMOKE !== '1' || !model) {
   const terminal = process.stdin.isTTY ? createInterface({ input: process.stdin, output: process.stdout }) : undefined
   try {
     manager = await open()
-    const session = await manager.createSession({ cwd, projectId: 'smoke', runtime: 'codex' })
+    await manager.createProject({ id: 'smoke', name: 'Smoke', workingDirectories: [cwd] })
+    const session = await manager.createSession({ cwd, model, projectId: 'smoke', runtime: 'codex' })
     const { runId } = await manager.run(session.id, { text: 'Without tools, count from one to twenty.' })
     const iterator = manager.subscribe(runId)[Symbol.asyncIterator]()
     const first = await iterator.next()
@@ -50,6 +51,7 @@ if (process.env.RUN_CODEX_SMOKE !== '1' || !model) {
     } else {
       const restricted = await manager.createSession({
         cwd,
+        model,
         options: { sandbox: 'read-only' },
         projectId: 'smoke',
         runtime: 'codex'

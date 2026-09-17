@@ -31,6 +31,9 @@ describe('RuntimeManager operations', () => {
     dir = await mkdtemp(join(tmpdir(), 'runtime-manager-'))
     adapter = new ManualAdapter()
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+    if ((await manager.listProjects()).items.length === 0) {
+      await manager.createProject({ id: 'project', name: 'project' })
+    }
   })
 
   afterEach(async () => {
@@ -53,7 +56,8 @@ describe('RuntimeManager operations', () => {
     }
   })
 
-  const create = () => manager.createSession({ cwd: dir, projectId: 'project', runtime: adapter.kind })
+  const create = () =>
+    manager.createSession({ cwd: dir, model: 'model-test', projectId: 'project', runtime: adapter.kind })
 
   test('keeps a run executing without subscribers', async () => {
     const session = await create()
@@ -116,7 +120,12 @@ describe('RuntimeManager operations', () => {
   test('stores canonical native session data and defaults the title to project', async () => {
     const alias = join(dir, 'alias')
     await symlink(dir, alias)
-    const session = await manager.createSession({ cwd: alias, projectId: 'project', runtime: adapter.kind })
+    const session = await manager.createSession({
+      cwd: alias,
+      model: 'model-test',
+      projectId: 'project',
+      runtime: adapter.kind
+    })
 
     expect(session).toMatchObject({
       cwd: await realpath(dir),
@@ -177,7 +186,13 @@ describe('RuntimeManager operations', () => {
     { extra: true }
   ])('rejects invalid creation input %j before native creation', async (invalid) => {
     await expect(
-      manager.createSession({ cwd: dir, projectId: 'project', runtime: adapter.kind, ...invalid } as never)
+      manager.createSession({
+        cwd: dir,
+        model: 'model-test',
+        projectId: 'project',
+        runtime: adapter.kind,
+        ...invalid
+      } as never)
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     expect(adapter.created).toEqual([])
   })
@@ -186,7 +201,9 @@ describe('RuntimeManager operations', () => {
     const file = join(dir, 'file.txt')
     await writeFile(file, 'content')
     for (const cwd of [file, join(dir, 'missing')]) {
-      await expect(manager.createSession({ cwd, projectId: 'project', runtime: adapter.kind })).rejects.toMatchObject({
+      await expect(
+        manager.createSession({ cwd, model: 'model-test', projectId: 'project', runtime: adapter.kind })
+      ).rejects.toMatchObject({
         code: 'INVALID_INPUT'
       })
     }
@@ -203,6 +220,9 @@ describe('RuntimeManager lifecycle', () => {
     dir = await mkdtemp(join(tmpdir(), 'runtime-manager-'))
     adapter = new ManualAdapter()
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+    if ((await manager.listProjects()).items.length === 0) {
+      await manager.createProject({ id: 'project', name: 'project' })
+    }
   })
 
   afterEach(async () => {
@@ -210,7 +230,8 @@ describe('RuntimeManager lifecycle', () => {
     await rm(dir, { force: true, recursive: true })
   })
 
-  const create = () => manager.createSession({ cwd: dir, projectId: 'project', runtime: adapter.kind })
+  const create = () =>
+    manager.createSession({ cwd: dir, model: 'model-test', projectId: 'project', runtime: adapter.kind })
 
   test('queries old sessions without their adapter and rejects execution', async () => {
     const session = await create()
@@ -233,6 +254,9 @@ describe('RuntimeManager lifecycle', () => {
     await manager.dispose()
     adapter = new DuplicateAdapter()
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+    if ((await manager.listProjects()).items.length === 0) {
+      await manager.createProject({ id: 'project', name: 'project' })
+    }
     const session = await create()
 
     await expect(create()).rejects.toMatchObject({ code: 'STORAGE_ERROR' })
@@ -253,6 +277,9 @@ describe('RuntimeManager lifecycle', () => {
     await manager.dispose()
     adapter = new FailingAdapter()
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+    if ((await manager.listProjects()).items.length === 0) {
+      await manager.createProject({ id: 'project', name: 'project' })
+    }
     const session = await create()
     const { runId } = await manager.run(session.id, { text: 'hello' })
     await manager.dispose()
@@ -277,6 +304,9 @@ describe('RuntimeManager lifecycle', () => {
     await manager.dispose()
     adapter = new MissingSessionAdapter()
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+    if ((await manager.listProjects()).items.length === 0) {
+      await manager.createProject({ id: 'project', name: 'project' })
+    }
     const session = await create()
     const { runId } = await manager.run(session.id, { text: 'hello' })
     await collect(manager.subscribe(runId))

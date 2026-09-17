@@ -13,15 +13,18 @@ import type {
   AdapterOutcome,
   Approval,
   ApprovalDecision,
+  CreateProjectInput,
   CreateSessionInput,
   EventEnvelope,
   ManagerOptions,
   NativeSession,
   Page,
+  Project,
   Run,
   RuntimeAdapter,
   Session,
-  SessionFilter
+  SessionFilter,
+  UpdateProjectInput
 } from './types'
 
 const NonBlankString = v.pipe(
@@ -31,7 +34,13 @@ const NonBlankString = v.pipe(
 const TitleSchema = v.pipe(NonBlankString, v.maxLength(256))
 const CreateSessionSchema = v.strictObject({
   cwd: NonBlankString,
-  options: v.optional(JsonObjectSchema),
+  model: NonBlankString,
+  options: v.optional(
+    v.pipe(
+      JsonObjectSchema,
+      v.check((value) => !Object.hasOwn(value, 'model'))
+    )
+  ),
   projectId: NonBlankString,
   runtime: NonBlankString,
   title: v.optional(TitleSchema)
@@ -59,7 +68,7 @@ const ManagerOptionsSchema = v.strictObject({
 /**
  * Owns durable sessions, background runs, approvals, and registered runtime adapters.
  */
-export class RuntimeManager {
+export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
   private readonly active = new Map<string, { done: Promise<void>; adapter: RuntimeAdapter }>()
   private readonly controls = new Set<Promise<unknown>>()
   private readonly storageOperations = new Set<Promise<unknown>>()
@@ -88,7 +97,7 @@ export class RuntimeManager {
    *
    * @throws {@link RuntimeError} when options are invalid or the data directory is already owned.
    */
-  static async open(options: ManagerOptions): Promise<RuntimeManager> {
+  static async open<const A extends RuntimeAdapter>(options: ManagerOptions<A>): Promise<RuntimeManager<A>> {
     const validated = parseInput(ManagerOptionsSchema, options)
     const adapters = new Map(validated.runtimes.map((adapter) => [adapter.kind, adapter]))
     if (adapters.size !== validated.runtimes.length) {
@@ -97,7 +106,7 @@ export class RuntimeManager {
     const store = await SessionStore.open(validated.dataDir)
     try {
       await store.recoverInterrupted()
-      return new RuntimeManager(store, adapters)
+      return new RuntimeManager<A>(store, adapters)
     } catch (cause) {
       const error = new RuntimeError('STORAGE_ERROR', 'Failed to recover unfinished runs', { cause })
       try {
@@ -109,17 +118,83 @@ export class RuntimeManager {
     }
   }
 
+  /** Create a stable project without starting a runtime. */
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    return await this.control(async () => {
+      const value = parseInput(
+        v.strictObject({
+          id: v.optional(NonBlankString),
+          name: TitleSchema,
+          workingDirectories: v.optional(v.array(NonBlankString), [])
+        }),
+        input
+      )
+      const workingDirectories = await this.projectDirectories(value.workingDirectories)
+      return await this.storage(() =>
+        this.store.insertProject({ ...value, id: value.id ?? randomUUID(), workingDirectories })
+      )
+    })
+  }
+
+  /** Read a project's durable identity and directory bindings. */
+  async getProject(id: string): Promise<Project> {
+    this.assertOpen()
+    return await this.storage(() => this.store.getProject(id))
+  }
+
+  /** List projects in descending creation order. */
+  async listProjects(page?: { limit?: number; cursor?: string }): Promise<Page<Project>> {
+    this.assertOpen()
+    return await this.storage(() => this.store.listProjects(page))
+  }
+
+  /** Change directory bindings or name without changing project or session identity. */
+  async updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
+    return await this.control(async () => {
+      const value = parseInput(
+        v.strictObject({ name: v.optional(TitleSchema), workingDirectories: v.optional(v.array(NonBlankString)) }),
+        input
+      )
+      const workingDirectories =
+        value.workingDirectories === undefined ? undefined : await this.projectDirectories(value.workingDirectories)
+      return await this.storage(() =>
+        this.store.updateProject(id, { ...value, ...(workingDirectories === undefined ? {} : { workingDirectories }) })
+      )
+    })
+  }
+
+  private async projectDirectories(paths: string[]): Promise<string[]> {
+    try {
+      return [
+        ...new Set(
+          await Promise.all(
+            paths.map(async (path) => {
+              const directory = await realpath(path)
+              if (!(await stat(directory)).isDirectory()) {
+                throw new Error('Not a directory')
+              }
+              return directory
+            })
+          )
+        )
+      ]
+    } catch (cause) {
+      throw new RuntimeError('INVALID_INPUT', 'Project working directories must exist', { cause })
+    }
+  }
+
   /**
    * Create and persist a session through the selected runtime.
    *
    * @param input - Runtime key, project identity, existing working directory, and optional native settings.
    * @returns The SDK-managed session with its native identity and effective options.
    */
-  async createSession(input: CreateSessionInput): Promise<Session> {
+  async createSession(input: CreateSessionInput<A>): Promise<Session> {
     return await this.control(async () => {
       const validated = parseInput(CreateSessionSchema, input)
       const title = parseInput(TitleSchema, validated.title ?? validated.projectId)
       const adapter = this.getAdapter(validated.runtime)
+      await this.storage(() => this.store.getProject(validated.projectId))
       let cwd: string
       try {
         cwd = await realpath(validated.cwd)
@@ -130,12 +205,18 @@ export class RuntimeManager {
         throw new RuntimeError('INVALID_INPUT', 'cwd must be an existing directory', { cause })
       }
       this.assertRunning()
-      const native = await adapter.createSession({ cwd, options: validated.options })
+      const native = await adapter.createSession({
+        cwd,
+        model: validated.model,
+        options: validated.options,
+        projectId: validated.projectId
+      })
       this.assertRunning()
       return this.storage(() =>
         this.store.insertSession({
           cwd: native.cwd,
           id: randomUUID(),
+          model: validated.model,
           nativeSessionId: native.nativeSessionId,
           options: native.options,
           projectId: validated.projectId,
@@ -513,8 +594,8 @@ export class RuntimeManager {
     return adapter
   }
 
-  private nativeSession({ nativeSessionId, cwd, options }: Session): NativeSession {
-    return { cwd, nativeSessionId, options }
+  private nativeSession({ nativeSessionId, cwd, options, projectId, model }: Session): NativeSession {
+    return { cwd, nativeSessionId, options, projectId, ...(model === null ? {} : { model }) }
   }
 
   private async drive(

@@ -14,7 +14,8 @@ describe('CodexRuntime', () => {
     const first = p.runtime.createSession({ cwd })
     const second = p.runtime.createSession({
       cwd,
-      options: { approvalPolicy: 'never', model: 'override', sandbox: 'read-only' }
+      model: 'override',
+      options: { approvalPolicy: 'never', sandbox: 'read-only' }
     })
     await p.handshake()
     const requests = [await p.request('thread/start'), await p.request('thread/start')]

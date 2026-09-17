@@ -40,7 +40,7 @@ const timeout = v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.
 const OptionsSchema = v.strictObject({
   codexHome: v.optional(nonempty),
   executable: v.optional(v.strictObject({ args: v.optional(v.array(v.string())), command: nonempty })),
-  model: nonempty,
+  model: v.optional(nonempty),
   requestTimeoutMs: timeout,
   shutdownTimeoutMs: timeout
 })
@@ -49,9 +49,9 @@ const SessionOptionsSchema = v.strictObject({
   model: v.optional(nonempty),
   sandbox: v.optional(v.picklist(['read-only', 'workspace-write']), 'workspace-write')
 })
-/**
- * Codex process settings, required default model, and optional request and shutdown timeouts in milliseconds.
- */
+/** Codex settings persisted per session, independently of the common model. */
+export type CodexSessionOptions = Omit<v.InferInput<typeof SessionOptionsSchema>, 'model'>
+/** Process settings and an optional default model for direct adapter callers. */
 export type CodexRuntimeOptions = v.InferInput<typeof OptionsSchema>
 type Notification = Extract<Frame, { kind: 'notification' }>
 type QueueEntry = { frame?: Notification; notice?: AdapterNotice; bytes: number; responseAttempted?: boolean }
@@ -126,23 +126,32 @@ export class CodexRuntime implements RuntimeAdapter {
   /**
    * Validate process settings without starting the native process.
    */
-  constructor(options: CodexRuntimeOptions) {
+  constructor(options: CodexRuntimeOptions = {}) {
     this.options = validate(OptionsSchema, options)
   }
 
   /**
    * Start a native thread with validated session options and a canonical working directory.
    */
-  async createSession(input: { cwd: string; options?: JsonObject }): Promise<NativeSession> {
+  async createSession(input: {
+    cwd: string
+    model?: string
+    projectId?: string
+    options?: CodexSessionOptions
+  }): Promise<NativeSession> {
     this.checkOpen()
-    const options = this.sessionOptions(input.options ?? {})
+    const options = this.sessionOptions(input.options ?? {}, input.model)
     const cwd = await this.directory(input.cwd)
     const client = await this.start()
     const params = { cwd, ...options, approvalsReviewer: 'user', ephemeral: false } satisfies ThreadStartParams
     const result = parseProtocol(ThreadResponseSchema, await client.request('thread/start', params))
     this.checkClient(client)
     this.loaded.set(result.thread.id, Promise.resolve())
-    return { cwd, nativeSessionId: result.thread.id, options }
+    if (input.model === undefined) {
+      return { cwd, nativeSessionId: result.thread.id, options }
+    }
+    const { model, ...runtimeOptions } = options
+    return { cwd, model, nativeSessionId: result.thread.id, options: runtimeOptions, projectId: input.projectId }
   }
 
   /**
@@ -151,7 +160,7 @@ export class CodexRuntime implements RuntimeAdapter {
   async resumeSession(session: NativeSession): Promise<void> {
     this.checkOpen()
     const nativeSessionId = validate(nonempty, session.nativeSessionId)
-    const options = this.sessionOptions(session.options)
+    const options = this.sessionOptions(session.options, session.model)
     const cwd = await this.directory(session.cwd)
     const client = await this.start()
     const existing = this.loaded.get(nativeSessionId)
@@ -301,9 +310,12 @@ export class CodexRuntime implements RuntimeAdapter {
       throw new RuntimeError('PROCESS_EXITED', 'App-server generation ended')
     }
   }
-  private sessionOptions(value: unknown) {
+  private sessionOptions(value: unknown, model?: string) {
     const options = validate(SessionOptionsSchema, value)
-    return { ...options, model: options.model ?? this.options.model }
+    return {
+      ...options,
+      model: validate(nonempty, model ?? options.model ?? this.options.model)
+    }
   }
   private async directory(value: string): Promise<string> {
     validate(nonempty, value)

@@ -15,6 +15,14 @@ import {
 
 import type { ApprovalDecision, ApprovalStatus, JsonObject, RunStatus, RuntimeFault } from './types'
 
+export const projects = pgTable('projects', {
+  createdAt: timestamp('created_at', { mode: 'string', withTimezone: true }).notNull().defaultNow(),
+  id: text().primaryKey(),
+  name: text().notNull(),
+  updatedAt: timestamp('updated_at', { mode: 'string', withTimezone: true }).notNull().defaultNow(),
+  workingDirectories: jsonb('working_directories').$type<string[]>().notNull().default([])
+})
+
 export const sessions = pgTable(
   'sessions',
   {
@@ -22,6 +30,7 @@ export const sessions = pgTable(
     createdAt: timestamp('created_at', { mode: 'string', withTimezone: true }).notNull().defaultNow(),
     cwd: text().notNull(),
     id: text().primaryKey(),
+    model: text(),
     nativeSessionId: text('native_session_id').notNull(),
     options: jsonb().$type<JsonObject>().notNull().default({}),
     projectId: text('project_id').notNull(),

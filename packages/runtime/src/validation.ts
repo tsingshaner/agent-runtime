@@ -47,6 +47,7 @@ export const JsonObjectSchema = v.custom<JsonObject>(
 export const InsertSessionInputSchema = v.strictObject({
   cwd: NonEmptyStringSchema,
   id: NonEmptyStringSchema,
+  model: v.optional(v.nullable(NonEmptyStringSchema)),
   nativeSessionId: NonEmptyStringSchema,
   options: JsonObjectSchema,
   projectId: NonEmptyStringSchema,
@@ -71,7 +72,7 @@ export const CursorSchema = v.strictObject({
   id: NonEmptyStringSchema
 })
 
-export type InsertSessionInput = v.InferOutput<typeof InsertSessionInputSchema>
+export type InsertSessionInput = v.InferInput<typeof InsertSessionInputSchema>
 export type Cursor = v.InferOutput<typeof CursorSchema>
 
 /**

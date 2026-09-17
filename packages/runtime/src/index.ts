@@ -10,6 +10,7 @@ export type {
   Approval,
   ApprovalDecision,
   ApprovalStatus,
+  CreateProjectInput,
   CreateSessionInput,
   EventEnvelope,
   Json,
@@ -17,10 +18,12 @@ export type {
   ManagerOptions,
   NativeSession,
   Page,
+  Project,
   Run,
   RunStatus,
   RuntimeAdapter,
   RuntimeFault,
   Session,
-  SessionFilter
+  SessionFilter,
+  UpdateProjectInput
 } from './types'

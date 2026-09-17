@@ -15,7 +15,7 @@ import { parseEvent, startedEvent, type TerminalOutcome, terminalEvent } from '.
 import { RuntimeError } from './errors'
 import { acquireDirectoryLock, type DirectoryLock } from './lock'
 import * as schema from './schema'
-import { approvals, events, runs, sessions } from './schema'
+import { approvals, events, projects, runs, sessions } from './schema'
 import { subscribeToRun } from './subscription'
 import {
   ArchivedSchema,
@@ -37,9 +37,11 @@ import type {
   ApprovalDecision,
   EventEnvelope,
   Page,
+  Project,
   Run,
   Session,
-  SessionFilter
+  SessionFilter,
+  UpdateProjectInput
 } from './types'
 
 const DecisionSchema = v.picklist(['approve', 'deny'])
@@ -235,6 +237,59 @@ export class SessionStore {
     if (this.closePromise) {
       throw new RuntimeError('DISPOSED', 'Store is closing or disposed')
     }
+  }
+
+  async insertProject(input: { id: string; name: string; workingDirectories: string[] }): Promise<Project> {
+    const [row] = await this.db.insert(projects).values(input).onConflictDoNothing().returning()
+    if (!row) {
+      throw new RuntimeError('PROJECT_EXISTS', 'Project already exists')
+    }
+    return this.getProject(row.id)
+  }
+
+  async getProject(id: string): Promise<Project> {
+    const [row] = await this.db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, parseInput(SessionIdSchema, id)))
+    if (!row) {
+      throw new RuntimeError('PROJECT_NOT_FOUND', `Project not found: ${id}`)
+    }
+    return {
+      ...row,
+      createdAt: new Date(row.createdAt).toISOString(),
+      updatedAt: new Date(row.updatedAt).toISOString()
+    }
+  }
+
+  async updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
+    await this.getProject(id)
+    await this.db
+      .update(projects)
+      .set({ ...input, updatedAt: sql`now()` })
+      .where(eq(projects.id, id))
+    return this.getProject(id)
+  }
+
+  async listProjects(page: { limit?: number; cursor?: string } = {}): Promise<Page<Project>> {
+    const validated = parseInput(PageInputSchema, page)
+    const cursor = decodeCursor(validated.cursor)
+    const rows = await this.db
+      .select()
+      .from(projects)
+      .where(
+        cursor === undefined
+          ? undefined
+          : sql`(${projects.createdAt}, ${projects.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id})`
+      )
+      .orderBy(desc(projects.createdAt), desc(projects.id))
+      .limit(validated.limit + 1)
+    const items = rows.slice(0, validated.limit).map((row) => ({
+      ...row,
+      createdAt: new Date(row.createdAt).toISOString(),
+      updatedAt: new Date(row.updatedAt).toISOString()
+    }))
+    return { items, nextCursor: rows.length > validated.limit ? encodeCursor(items.at(-1) as Project) : null }
   }
 
   /**

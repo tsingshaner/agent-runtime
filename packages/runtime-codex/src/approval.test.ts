@@ -275,7 +275,13 @@ describe('Codex approvals', () => {
     }
     const manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
     try {
-      const session = await manager.createSession({ cwd: dir, projectId: 'race', runtime: adapter.kind })
+      await manager.createProject({ id: 'race', name: 'race' })
+      const session = await manager.createSession({
+        cwd: dir,
+        model: 'model-test',
+        projectId: 'race',
+        runtime: adapter.kind
+      })
       const { runId } = await manager.run(session.id, { text: 'hello' })
       const start = await p.request('turn/start')
       await p.send({ id: start.id, result: { turn: turn('turn') } })

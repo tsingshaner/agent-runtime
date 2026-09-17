@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { RuntimeManager } from '@qingshaner/runtime'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, test } from 'vitest'
 
 import { closePeers, delta, done, peer, turn } from './runtime-peer'
 
@@ -25,35 +25,77 @@ const setup = async (directory?: string) => {
   }
   const remote = await peer(1000, dir)
   const manager = await RuntimeManager.open({ dataDir: join(dir, 'data'), runtimes: [remote.runtime] })
+  if (!directory) {
+    await manager.createProject({ id: 'demo', name: 'demo' })
+  }
   managers.push(manager)
   return { dir, manager, remote }
 }
 const create = async (context: Awaited<ReturnType<typeof setup>>, id = 'native') => {
-  const pending = context.manager.createSession({ cwd: context.dir, projectId: 'demo', runtime: 'codex' })
+  const pending = context.manager.createSession({
+    cwd: context.dir,
+    model: 'session-model',
+    projectId: 'demo',
+    runtime: 'codex'
+  })
   if (context.remote.connections() === 0) {
     await context.remote.handshake()
   }
   const frame = await context.remote.request('thread/start')
   // biome-ignore lint/suspicious/noMisplacedAssertion: Integration protocol invariant.
-  expect(frame.params).toMatchObject({ approvalPolicy: 'on-request', ephemeral: false, sandbox: 'workspace-write' })
-  await context.remote.send({ id: frame.id, result: { cwd: context.dir, model: 'model-test', thread: { id } } })
+  expect(frame.params).toMatchObject({
+    approvalPolicy: 'on-request',
+    ephemeral: false,
+    model: 'session-model',
+    sandbox: 'workspace-write'
+  })
+  await context.remote.send({ id: frame.id, result: { cwd: context.dir, model: 'session-model', thread: { id } } })
   return pending
 }
 
 describe('public Codex SDK integration', () => {
+  test('rejects invalid native options through the Manager before process startup', async () => {
+    const context = await setup()
+    await expect(
+      context.manager.createSession({
+        cwd: context.dir,
+        model: 'session-model',
+        options: { sandbox: 'danger-full-access' },
+        projectId: 'demo',
+        runtime: 'codex'
+      } as never)
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    expect(context.remote.connections()).toBe(0)
+    expect((await context.manager.listSessions()).items).toEqual([])
+  })
+
   test('a fresh manager resumes a persisted public session', async () => {
     const first = await setup()
+    expectTypeOf<Parameters<typeof first.manager.createSession>[0]>().toEqualTypeOf<{
+      runtime: 'codex'
+      model: string
+      projectId: string
+      cwd: string
+      title?: string
+      options?: { approvalPolicy?: 'on-request' | 'never'; sandbox?: 'read-only' | 'workspace-write' }
+    }>()
     const session = await create(first)
+    expect(session.model).toBe('session-model')
+    expect(session.options).toEqual({ approvalPolicy: 'on-request', sandbox: 'workspace-write' })
     expect(JSON.parse(await readFile(join(first.dir, 'threads.json'), 'utf8'))).toEqual([session.nativeSessionId])
     await first.manager.dispose()
     const second = await setup(first.dir)
     const pending = second.manager.resumeSession(session.id)
     await second.remote.handshake()
     const frame = await second.remote.request('thread/resume')
-    expect(frame.params.threadId).toBe(session.nativeSessionId)
+    expect(frame.params).toMatchObject({
+      model: 'session-model',
+      sandbox: 'workspace-write',
+      threadId: session.nativeSessionId
+    })
     await second.remote.send({
       id: frame.id,
-      result: { cwd: first.dir, model: 'model-test', thread: { id: session.nativeSessionId } }
+      result: { cwd: first.dir, model: 'session-model', thread: { id: session.nativeSessionId } }
     })
     await expect(pending).resolves.toMatchObject({ id: session.id, nativeSessionId: session.nativeSessionId })
     const unknown = second.remote.runtime.resumeSession({ cwd: first.dir, nativeSessionId: 'unknown', options: {} })

@@ -38,9 +38,29 @@ export type ApprovalStatus = 'pending' | 'responding' | 'resolved' | 'expired'
  */
 export type RuntimeFault = { code: string; message: string }
 
-/**
- * A session created through this SDK, with SDK and native identities stored separately.
- */
+/** Stable project identity independent of its working directories. */
+export interface Project {
+  id: string
+  name: string
+  workingDirectories: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+/** Project creation; an explicit ID can be used by existing integrations. */
+export interface CreateProjectInput {
+  id?: string
+  name: string
+  workingDirectories?: string[]
+}
+
+/** Editable project metadata; session identities remain unchanged. */
+export interface UpdateProjectInput {
+  name?: string
+  workingDirectories?: string[]
+}
+
+/** A session created through this SDK, with SDK and native identities stored separately. */
 export interface Session {
   id: string
   runtime: string
@@ -48,6 +68,8 @@ export interface Session {
   projectId: string
   cwd: string
   title: string
+  /** Null only for legacy sessions which did not persist a model. */
+  model: string | null
   options: JsonObject
   createdAt: string
   updatedAt: string
@@ -138,6 +160,9 @@ export interface AdapterOutcome {
  * Native identity and effective options required to resume a managed session.
  */
 export interface NativeSession {
+  projectId?: string
+  model?: string
+
   nativeSessionId: string
   cwd: string
   options: JsonObject
@@ -157,7 +182,12 @@ export interface RuntimeAdapter {
   /**
    * Create a native session and return its effective working directory and options.
    */
-  createSession(input: { cwd: string; options?: JsonObject }): Promise<NativeSession>
+  createSession(input: {
+    cwd: string
+    model?: string
+    projectId?: string
+    options?: JsonObject
+  }): Promise<NativeSession>
   /**
    * Load a previously managed native session; repeated calls must be safe.
    */
@@ -208,7 +238,7 @@ export interface SessionFilter {
 /**
  * Persistent data directory and runtime adapters owned by the manager.
  */
-export interface ManagerOptions {
+export interface ManagerOptions<A extends RuntimeAdapter = RuntimeAdapter> {
   /**
    * Persistent directory exclusively owned until the manager is disposed.
    */
@@ -216,16 +246,19 @@ export interface ManagerOptions {
   /**
    * Adapters with unique kind values; disposed together with the manager.
    */
-  runtimes: RuntimeAdapter[]
+  runtimes: A[]
 }
 
 /**
  * Input for creating an SDK-managed session through a registered runtime.
  */
-export interface CreateSessionInput {
-  runtime: string
-  projectId: string
-  cwd: string
-  title?: string
-  options?: JsonObject
-}
+export type CreateSessionInput<A extends RuntimeAdapter = RuntimeAdapter> = A extends RuntimeAdapter
+  ? {
+      runtime: A['kind']
+      model: string
+      projectId: string
+      cwd: string
+      title?: string
+      options?: Parameters<A['createSession']>[0]['options']
+    }
+  : never

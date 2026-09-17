@@ -42,15 +42,16 @@ create/resume operation lazily starts one owned app-server per runtime instance.
 ```ts
 import { CodexRuntime } from '@qingshaner/runtime-codex'
 
-const runtime = new CodexRuntime({ model: 'your-model' })
+const runtime = new CodexRuntime()
 // Register runtime in RuntimeManager.open({ dataDir, runtimes: [runtime] }).
+// Pass model explicitly to manager.createSession({ projectId, cwd, runtime: 'codex', model }).
 ```
 
-Constructor options: required `model`; optional `codexHome`, `executable` with
+Constructor options: optional `model` default for legacy/direct adapter callers, `codexHome`, `executable` with
 `command` and `args`, `requestTimeoutMs`, and `shutdownTimeoutMs`. Authentication
 uses the CLI environment/home; never put credentials in session options. No
-configuration file is changed. Session options accept only `model`,
-`sandbox` (`workspace-write` default or `read-only`), and `approvalPolicy`
+configuration file is changed. Manager sessions require a top-level `model`; typed
+`CodexSessionOptions` accept only `sandbox` (`workspace-write` default or `read-only`), and `approvalPolicy`
 (`on-request` default or `never`). Native threads always use `ephemeral: false`.
 Input is text only. Command and file-change approvals support one-time approve
 or deny; unsupported interactive requests are declined or fail explicitly.

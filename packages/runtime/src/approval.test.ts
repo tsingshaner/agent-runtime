@@ -18,7 +18,8 @@ describe('recoverable approvals and cancellation', () => {
     dir = await mkdtemp(join(tmpdir(), 'runtime-approvals-'))
     adapter = new ManualAdapter()
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
-    const session = await manager.createSession({ cwd: dir, projectId: 'test', runtime: 'manual' })
+    await manager.createProject({ id: 'test', name: 'test' })
+    const session = await manager.createSession({ cwd: dir, model: 'model-test', projectId: 'test', runtime: 'manual' })
     runId = (await manager.run(session.id, { text: 'hello' })).runId
     await adapter.waitStarted(runId)
     await adapter.push(runId, { kind: 'started', nativeTurnId: 'native-turn' })
@@ -80,7 +81,7 @@ describe('recoverable approvals and cancellation', () => {
     if (!approval) {
       throw new Error('Missing approval')
     }
-    const other = await manager.createSession({ cwd: dir, projectId: 'test', runtime: 'manual' })
+    const other = await manager.createSession({ cwd: dir, model: 'model-test', projectId: 'test', runtime: 'manual' })
     const otherRun = await manager.run(other.id, { text: 'other' })
     await adapter.waitStarted(otherRun.runId)
     await expect(manager.respondApproval(otherRun.runId, approval.id, 'approve')).rejects.toMatchObject({
@@ -146,7 +147,7 @@ describe('recoverable approvals and cancellation', () => {
     adapter.resumeGate = new Promise<void>((resolve) => {
       release = resolve
     })
-    const session = await manager.createSession({ cwd: dir, projectId: 'test', runtime: 'manual' })
+    const session = await manager.createSession({ cwd: dir, model: 'model-test', projectId: 'test', runtime: 'manual' })
     const early = await manager.run(session.id, { text: 'early' })
     const cancellation = manager.cancel(early.runId)
     // Store read is a transaction barrier after markCancelling.

@@ -41,7 +41,13 @@ describe('recovery and shutdown', () => {
   })
   const open = async (adapter = new ManualAdapter()) => {
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
-    const session = await manager.createSession({ cwd: dir, projectId: 'project', runtime: adapter.kind })
+    await manager.createProject({ id: 'project', name: 'project' })
+    const session = await manager.createSession({
+      cwd: dir,
+      model: 'model-test',
+      projectId: 'project',
+      runtime: adapter.kind
+    })
     return { adapter, manager, session }
   }
 
@@ -150,7 +156,8 @@ describe('recovery and shutdown', () => {
       }
     }
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [new Adapter()] })
-    const creating = manager.createSession({ cwd: dir, projectId: 'project', runtime: 'manual' })
+    await manager.createProject({ id: 'project', name: 'project' })
+    const creating = manager.createSession({ cwd: dir, model: 'model-test', projectId: 'project', runtime: 'manual' })
     await entered.promise
     const closing = manager.dispose()
     expect(disposed).toBe(false)

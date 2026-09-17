@@ -1,0 +1,23 @@
+{
+  "name": "@qingshaner/knowledge",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "ISC",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "valibot": "1.5.0"
+  }
+}

@@ -6,6 +6,7 @@ const ROOT = import.meta.dirname
 const packages = [
   ['runtime', '@qingshaner/runtime'],
   ['memory', '@qingshaner/memory'],
+  ['knowledge', '@qingshaner/knowledge'],
   ['shared', '@internal/shared'],
   ['runtime-codex', '@qingshaner/runtime-codex']
 ] as const

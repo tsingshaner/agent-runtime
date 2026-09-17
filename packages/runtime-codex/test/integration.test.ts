@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { RuntimeManager } from '@qingshaner/runtime'
-import { afterEach, describe, expect, expectTypeOf, test } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest'
 
 import { closePeers, delta, done, peer, turn } from './runtime-peer'
 
@@ -67,6 +67,44 @@ describe('public Codex SDK integration', () => {
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     expect(context.remote.connections()).toBe(0)
     expect((await context.manager.listSessions()).items).toEqual([])
+  })
+
+  test('answers a native input request through the durable Manager API', async () => {
+    const context = await setup()
+    const session = await create(context)
+    const { runId } = await context.manager.run(session.id, { text: 'Ask me' })
+    const start = await context.remote.request('turn/start')
+    await context.remote.send({ id: start.id, result: { turn: turn('turn') } })
+    await context.remote.send({
+      id: 'input-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        autoResolutionMs: null,
+        isBlocking: true,
+        itemId: 'item',
+        questions: [
+          { header: 'Choice', id: 'choice', isOther: true, isSecret: false, options: null, question: 'Which?' }
+        ],
+        threadId: session.nativeSessionId,
+        turnId: 'turn'
+      }
+    })
+    await vi.waitFor(async () => expect((await context.manager.listPendingInputs(runId)).length).toBe(1))
+    const [input] = await context.manager.listPendingInputs(runId)
+    if (!input) {
+      throw new Error('Missing input')
+    }
+    const answering = context.manager.respondInput(runId, input.id, { choice: ['mine'] })
+    expect((await context.remote.request()).result).toEqual({ answers: { choice: { answers: ['mine'] } } })
+    await context.remote.send({
+      method: 'serverRequest/resolved',
+      params: { requestId: 'input-1', threadId: session.nativeSessionId }
+    })
+    await answering
+    expect((await context.manager.getRun(runId)).status).toBe('running')
+    await context.remote.send(done(session.nativeSessionId, 'turn'))
+    await Array.fromAsync(context.manager.subscribe(runId))
+    expect((await context.manager.getRun(runId)).status).toBe('succeeded')
   })
 
   test('a fresh manager resumes a persisted public session', async () => {

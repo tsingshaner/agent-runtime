@@ -117,7 +117,6 @@ describe('Codex approvals', () => {
     await execution
   })
   test.each([
-    ['item/tool/requestUserInput', { answers: {} }],
     ['mcpServer/elicitation/request', { _meta: null, action: 'decline', content: null }],
     ['item/permissions/requestApproval', { permissions: {}, scope: 'turn' }]
   ])('safely answers unsupported %s with the generated protocol', async (method, result) => {

@@ -4,6 +4,7 @@ import {
   type AdapterNotice,
   type AdapterOutcome,
   type ApprovalDecision,
+  type InputAnswers,
   type Json,
   type JsonObject,
   type NativeSession,
@@ -27,7 +28,9 @@ import {
   RequestResolvedSchema,
   ThreadResponseSchema,
   TurnNotificationSchema,
-  TurnResponseSchema
+  TurnResponseSchema,
+  UserInputResponseSchema,
+  UserInputSchema
 } from './protocol'
 
 import type { InitializeParams } from './schemas/InitializeParams'
@@ -55,11 +58,13 @@ export type CodexSessionOptions = Omit<v.InferInput<typeof SessionOptionsSchema>
 export type CodexRuntimeOptions = v.InferInput<typeof OptionsSchema>
 type Notification = Extract<Frame, { kind: 'notification' }>
 type QueueEntry = { frame?: Notification; notice?: AdapterNotice; bytes: number; responseAttempted?: boolean }
-interface PendingApproval {
-  allowedDecisions: ApprovalDecision[]
+interface PendingResponse {
   responding: boolean
   resolved: boolean
   confirmation?: PromiseWithResolvers<void>
+}
+interface PendingApproval extends PendingResponse {
+  allowedDecisions: ApprovalDecision[]
 }
 interface ActiveRun {
   runId: string
@@ -77,6 +82,7 @@ interface ActiveRun {
   interrupt?: Promise<void>
   cancellation?: PromiseWithResolvers<void>
   approvals: Map<string | number, PendingApproval>
+  inputs: Map<string | number, PendingResponse>
   fault?: RuntimeError
   outcome?: AdapterOutcome
   stopping?: Promise<void>
@@ -218,6 +224,7 @@ export class CodexRuntime implements RuntimeAdapter {
         count: 0,
         emit,
         finished: false,
+        inputs: new Map(),
         mapper: new CodexEventMapper(input.sessionId, input.runId),
         nativeEnded: false,
         pumping: false,
@@ -279,6 +286,30 @@ export class CodexRuntime implements RuntimeAdapter {
         parseProtocol(ApprovalResponseSchema, { decision: decision === 'approve' ? 'accept' : 'decline' })
       )
       .catch(() => confirmation.reject(uncertain()))
+    await result
+  }
+
+  /** Answer questions without granting tool permissions, awaiting native resolution. */
+  async respondInput(runId: string, nativeRequestId: string | number, answers: InputAnswers): Promise<void> {
+    this.checkOpen()
+    const run = this.runs.get(runId)
+    const input = run?.inputs.get(nativeRequestId)
+    if (!(run?.client && input)) {
+      throw new RuntimeError('INPUT_NOT_FOUND', 'No input request for run')
+    }
+    if (input.responding || input.resolved) {
+      throw new RuntimeError('INPUT_NOT_PENDING', 'Input is not pending')
+    }
+    const payload = parseProtocol(UserInputResponseSchema, {
+      answers: Object.fromEntries(Object.entries(answers).map(([id, values]) => [id, { answers: values }]))
+    })
+    input.responding = true
+    const confirmation = Promise.withResolvers<void>()
+    input.confirmation = confirmation
+    const uncertain = () => new RuntimeError('INPUT_RESPONSE_UNCERTAIN', 'Input response was not confirmed')
+    const timer = setTimeout(() => confirmation.reject(uncertain()), this.options.requestTimeoutMs ?? 15_000)
+    const result = confirmation.promise.finally(() => clearTimeout(timer))
+    void run.client.reply(nativeRequestId, payload).catch(() => confirmation.reject(uncertain()))
     await result
   }
 
@@ -489,8 +520,8 @@ export class CodexRuntime implements RuntimeAdapter {
     let result: Json | undefined
     switch (frame.method) {
       case 'item/tool/requestUserInput':
-        result = parseProtocol(EmptyAnswersSchema, { answers: {} })
-        break
+        this.requestInput(client, frame)
+        return
       case 'mcpServer/elicitation/request':
         result = parseProtocol(DeclineElicitationSchema, { _meta: null, action: 'decline', content: null })
         break
@@ -519,7 +550,7 @@ export class CodexRuntime implements RuntimeAdapter {
 
   private resolveRequest(run: ActiveRun, frame: Notification): void {
     const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
-    const approval = run.approvals.get(requestId)
+    const approval = run.approvals.get(requestId) ?? run.inputs.get(requestId)
     if (!approval || approval.resolved) {
       return
     }
@@ -547,7 +578,7 @@ export class CodexRuntime implements RuntimeAdapter {
         .catch(() => client.close())
       return
     }
-    if (run.approvals.has(frame.id)) {
+    if (run.approvals.has(frame.id) || run.inputs.has(frame.id)) {
       this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native approval request'))
       return
     }
@@ -575,6 +606,31 @@ export class CodexRuntime implements RuntimeAdapter {
         kind: 'approval',
         request: { allowedDecisions, detail, kind: command ? 'command' : 'file-change', nativeRequestId: frame.id }
       }
+    })
+  }
+
+  private requestInput(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
+    const params = parseProtocol(UserInputSchema, frame.params)
+    const run = this.threads.get(params.threadId)
+    if (
+      !run ||
+      run.client !== client ||
+      run.finished ||
+      run.nativeEnded ||
+      (run.turnId && run.turnId !== params.turnId)
+    ) {
+      void client.reply(frame.id, parseProtocol(EmptyAnswersSchema, { answers: {} })).catch(() => client.close())
+      return
+    }
+    if (run.inputs.has(frame.id) || run.approvals.has(frame.id)) {
+      this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native input request'))
+      return
+    }
+    this.bind(run, params.turnId)
+    run.inputs.set(frame.id, { resolved: false, responding: false })
+    this.enqueue(run, {
+      bytes: Buffer.byteLength(JSON.stringify(frame)),
+      notice: { kind: 'input', request: { nativeRequestId: frame.id, questions: params.questions } }
     })
   }
 
@@ -707,8 +763,13 @@ export class CodexRuntime implements RuntimeAdapter {
   private async project(run: ActiveRun, frame: Notification, responseAttempted?: boolean): Promise<void> {
     if (frame.method === 'serverRequest/resolved') {
       const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
-      await run.emit({ kind: 'approval-resolved', nativeRequestId: requestId, responseAttempted })
-      run.approvals.get(requestId)?.confirmation?.resolve()
+      const input = run.inputs.get(requestId)
+      await run.emit({
+        kind: input ? 'input-resolved' : 'approval-resolved',
+        nativeRequestId: requestId,
+        responseAttempted
+      })
+      ;(input ?? run.approvals.get(requestId))?.confirmation?.resolve()
       return
     }
     if (frame.method !== 'turn/completed') {
@@ -737,6 +798,10 @@ export class CodexRuntime implements RuntimeAdapter {
         new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Run ended before approval confirmation')
       )
     }
+    for (const input of run.inputs.values()) {
+      input.confirmation?.reject(new RuntimeError('INPUT_RESPONSE_UNCERTAIN', 'Run ended before input confirmation'))
+    }
+    run.inputs.clear()
     run.approvals.clear()
     this.runs.delete(run.runId)
     this.threads.delete(run.threadId)

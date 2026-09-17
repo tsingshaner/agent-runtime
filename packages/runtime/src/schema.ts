@@ -13,7 +13,16 @@ import {
   uniqueIndex
 } from 'drizzle-orm/pg-core'
 
-import type { ApprovalDecision, ApprovalStatus, JsonObject, RunStatus, RuntimeFault } from './types'
+import type {
+  ApprovalDecision,
+  ApprovalStatus,
+  InputAnswers,
+  InputQuestion,
+  InputRequest,
+  JsonObject,
+  RunStatus,
+  RuntimeFault
+} from './types'
 
 export const projects = pgTable('projects', {
   createdAt: timestamp('created_at', { mode: 'string', withTimezone: true }).notNull().defaultNow(),
@@ -61,13 +70,13 @@ export const runs = pgTable(
   (table) => [
     check(
       'runs_status_check',
-      sql`${table.status} in ('starting', 'running', 'waiting_approval', 'cancelling', 'succeeded', 'failed', 'cancelled', 'interrupted')`
+      sql`${table.status} in ('starting', 'running', 'waiting_approval', 'waiting_input', 'cancelling', 'succeeded', 'failed', 'cancelled', 'interrupted')`
     ),
     unique().on(table.sessionId, table.requestId),
     check('runs_last_sequence_check', sql`${table.lastSequence} >= 0`),
     uniqueIndex('one_active_run')
       .on(table.sessionId)
-      .where(sql`${table.status} in ('starting', 'running', 'waiting_approval', 'cancelling')`),
+      .where(sql`${table.status} in ('starting', 'running', 'waiting_approval', 'waiting_input', 'cancelling')`),
     index('session_runs').on(table.sessionId, table.createdAt.desc(), table.id.desc())
   ]
 )
@@ -106,5 +115,23 @@ export const approvals = pgTable(
     check('approvals_status_check', sql`${table.status} in ('pending', 'responding', 'resolved', 'expired')`),
     check('approvals_decision_check', sql`${table.decision} in ('approve', 'deny')`),
     unique().on(table.runId, table.nativeRequestId)
+  ]
+)
+
+export const inputRequests = pgTable(
+  'input_requests',
+  {
+    answers: jsonb().$type<InputAnswers>(),
+    id: text().primaryKey(),
+    nativeRequestId: jsonb('native_request_id').$type<string | number>().notNull(),
+    questions: jsonb().$type<InputQuestion[]>().notNull(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id),
+    status: text().$type<InputRequest['status']>().notNull()
+  },
+  (table) => [
+    unique().on(table.runId, table.nativeRequestId),
+    check('input_status_check', sql`${table.status} in ('pending', 'responding', 'resolved', 'expired')`)
   ]
 )

@@ -63,3 +63,7 @@ try {
 `run(sessionId, { text, requestId? })` 支持按会话去重：相同 requestId 和原样文本返回原 Run，不同文本返回 REQUEST_CONFLICT。
 不传 requestId 始终视为新请求。重启、归档、运行失败或事件清理后仍可找回原记录，不重放原生执行。
 SDK 示例可同时设置 SESSION_ID 和 REQUEST_ID 重试同一请求。
+
+`listPendingInputs(runId)` 查询补充问题，`respondInput(runId, inputId, answers)` 按问题 ID 提供字符串数组。
+InputEvent 的 runtime.input.requested / runtime.input.resolved 扩展在持久化后发布；waiting_input 仍占用会话。
+回答待原生确认，发送结果不确定时保留 responding 且拒绝重发；终态与重启将旧请求过期。SDK 示例在终端交互回答，无终端时取消等待输入的运行。

@@ -6,6 +6,7 @@ import type {
   AdapterNotice,
   AdapterOutcome,
   ApprovalDecision,
+  InputAnswers,
   JsonObject,
   NativeSession,
   RuntimeAdapter
@@ -13,6 +14,8 @@ import type {
 
 export class ManualAdapter implements RuntimeAdapter {
   readonly kind = 'manual'
+  readonly answers: { runId: string; nativeRequestId: string | number; answers: InputAnswers }[] = []
+  inputError?: Error
   readonly created: NativeSession[] = []
   readonly resumed: NativeSession[] = []
   readonly cancelled: string[] = []
@@ -144,6 +147,14 @@ export class ManualAdapter implements RuntimeAdapter {
     if (this.confirmApprovals) {
       await this.push(runId, { kind: 'approval-resolved', nativeRequestId })
     }
+  }
+
+  async respondInput(runId: string, nativeRequestId: string | number, answers: InputAnswers): Promise<void> {
+    this.answers.push({ answers, nativeRequestId, runId })
+    if (this.inputError) {
+      throw this.inputError
+    }
+    await this.push(runId, { kind: 'input-resolved', nativeRequestId })
   }
 
   dispose(): Promise<void> {

@@ -16,6 +16,8 @@ import type {
   CreateProjectInput,
   CreateSessionInput,
   EventEnvelope,
+  InputAnswers,
+  InputRequest,
   ManagerOptions,
   NativeSession,
   Page,
@@ -371,6 +373,31 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     return await this.storage(() => this.store.listPendingApprovals(runId))
   }
 
+  /** Query unanswered inputs, including responses awaiting native confirmation. */
+  async listPendingInputs(runId: string): Promise<InputRequest[]> {
+    this.assertOpen()
+    return await this.storage(() => this.store.listPendingInputs(runId))
+  }
+
+  /** Claim one input response durably; uncertain sends cannot be repeated. */
+  async respondInput(runId: string, inputId: string, answers: InputAnswers): Promise<void> {
+    return await this.control(async () => {
+      const run = await this.storage(() => this.store.getRun(runId))
+      const session = await this.storage(() => this.store.getSession(run.sessionId))
+      const adapter = this.getAdapter(session.runtime)
+      if (!adapter.respondInput) {
+        throw new RuntimeError('UNSUPPORTED_INPUT', 'Runtime does not support input responses')
+      }
+      const request = await this.storage(() => this.store.claimInput(runId, inputId, answers))
+      this.assertRunning()
+      try {
+        await adapter.respondInput(runId, request.nativeRequestId, request.answers as InputAnswers)
+      } catch (cause) {
+        throw new RuntimeError('INPUT_RESPONSE_UNCERTAIN', 'Input response was not confirmed', { cause })
+      }
+    })
+  }
+
   /**
    * Durably claim an approval before sending its decision to the native runtime.
    *
@@ -646,6 +673,12 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
 
   private async receive(runId: string, notice: AdapterNotice): Promise<void> {
     switch (notice.kind) {
+      case 'input':
+        await this.storage(() => this.store.requestInput(runId, notice.request))
+        return
+      case 'input-resolved':
+        await this.storage(() => this.store.resolveInput(runId, notice.nativeRequestId, notice.responseAttempted))
+        return
       case 'started':
         await this.storage(() => this.store.setNativeTurn(runId, notice.nativeTurnId))
         return

@@ -33,6 +33,7 @@ const roots = [
     'CommandExecutionRequestApprovalResponse',
     'FileChangeRequestApprovalParams',
     'FileChangeRequestApprovalResponse',
+    'ToolRequestUserInputParams',
     'ToolRequestUserInputResponse',
     'McpServerElicitationRequestResponse',
     'PermissionsRequestApprovalResponse',

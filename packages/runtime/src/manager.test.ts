@@ -43,7 +43,7 @@ describe('RuntimeManager operations', () => {
     await Promise.all([...active.keys()].map((runId) => manager.cancel(runId)))
     await Promise.all(pending)
     const store = Reflect.get(manager, 'store') as SessionStore
-    await store.db.execute(sql`TRUNCATE TABLE approvals, events, runs, sessions`)
+    await store.db.execute(sql`TRUNCATE TABLE input_requests, approvals, events, runs, sessions`)
     adapter.reset()
     await Promise.all(['alias', 'file.txt'].map((name) => rm(join(dir, name), { force: true })))
   })

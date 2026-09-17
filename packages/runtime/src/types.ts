@@ -1,4 +1,4 @@
-import type { EventSchemas } from '@ag-ui/core'
+import type { EventSchemas, EventType } from '@ag-ui/core'
 
 /**
  * An event validated against the AG-UI event schemas.
@@ -24,6 +24,7 @@ export type RunStatus =
   | 'starting'
   | 'running'
   | 'waiting_approval'
+  | 'waiting_input'
   | 'cancelling'
   | 'succeeded'
   | 'failed'
@@ -135,10 +136,40 @@ export interface Approval {
   decision: ApprovalDecision | null
 }
 
+/** A question may accept free text or one of the suggested options. */
+export interface InputQuestion {
+  id: string
+  header: string
+  question: string
+  isOther?: boolean
+  isSecret?: boolean
+  options?: { label: string; description: string }[] | null
+}
+export type InputAnswers = Record<string, string[]>
+export interface InputRequest {
+  id: string
+  runId: string
+  nativeRequestId: string | number
+  questions: InputQuestion[]
+  status: 'pending' | 'responding' | 'resolved' | 'expired'
+  answers: InputAnswers | null
+}
+
+/** Typed AG-UI extensions for durable input interactions. */
+export type InputEvent =
+  | { type: EventType.CUSTOM; name: 'runtime.input.requested'; value: Omit<InputRequest, 'nativeRequestId'> }
+  | {
+      type: EventType.CUSTOM
+      name: 'runtime.input.resolved'
+      value: { inputId: string; status: 'resolved' | 'expired' }
+    }
+
 /**
  * Adapter notifications consumed in order by the manager for durable persistence.
  */
 export type AdapterNotice =
+  | { kind: 'input'; request: Pick<InputRequest, 'nativeRequestId' | 'questions'> }
+  | { kind: 'input-resolved'; nativeRequestId: string | number; responseAttempted?: boolean }
   | { kind: 'started'; nativeTurnId: string }
   | { kind: 'event'; event: AgUiEvent }
   | {
@@ -216,6 +247,8 @@ export interface RuntimeAdapter {
   /**
    * Send a decision for the native request associated with this run.
    */
+  /** Answer a native input request; adapters must emit input-resolved after confirmation. */
+  respondInput?(runId: string, nativeRequestId: string | number, answers: InputAnswers): Promise<void>
   respondApproval(runId: string, nativeRequestId: string | number, decision: ApprovalDecision): Promise<void>
   /**
    * Release all resources owned by this adapter; repeated calls must be safe.

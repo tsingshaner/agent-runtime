@@ -16,6 +16,7 @@ import type { ServerRequestResolvedNotification } from './schemas/v2/ServerReque
 import type { Thread } from './schemas/v2/Thread'
 import type { ThreadItem } from './schemas/v2/ThreadItem'
 import type { ThreadStartResponse } from './schemas/v2/ThreadStartResponse'
+import type { ToolRequestUserInputParams } from './schemas/v2/ToolRequestUserInputParams'
 import type { ToolRequestUserInputResponse } from './schemas/v2/ToolRequestUserInputResponse'
 import type { Turn } from './schemas/v2/Turn'
 import type { TurnError } from './schemas/v2/TurnError'
@@ -23,6 +24,30 @@ import type { TurnError } from './schemas/v2/TurnError'
 export const ApprovalResponseSchema = v.strictObject({
   decision: v.picklist(['accept', 'decline'])
 }) satisfies v.GenericSchema<unknown, CommandExecutionRequestApprovalResponse & FileChangeRequestApprovalResponse>
+export const UserInputSchema = v.object({
+  autoResolutionMs: v.nullable(v.number()),
+  isBlocking: v.boolean(),
+  itemId: v.string(),
+  questions: v.pipe(
+    v.array(
+      v.object({
+        header: v.string(),
+        id: v.pipe(v.string(), v.minLength(1)),
+        isOther: v.boolean(),
+        isSecret: v.boolean(),
+        options: v.nullable(v.array(v.object({ description: v.string(), label: v.string() }))),
+        question: v.pipe(v.string(), v.minLength(1))
+      })
+    ),
+    v.minLength(1),
+    v.check((questions) => new Set(questions.map(({ id }) => id)).size === questions.length)
+  ),
+  threadId: v.string(),
+  turnId: v.string()
+}) satisfies v.GenericSchema<unknown, ToolRequestUserInputParams>
+export const UserInputResponseSchema = v.strictObject({
+  answers: v.record(v.string(), v.strictObject({ answers: v.array(v.string()) }))
+}) satisfies v.GenericSchema<unknown, ToolRequestUserInputResponse>
 export const EmptyAnswersSchema = v.strictObject({ answers: v.strictObject({}) }) satisfies v.GenericSchema<
   unknown,
   ToolRequestUserInputResponse
@@ -243,6 +268,7 @@ const parameterSchemas: Record<string, v.GenericSchema> = {
   'item/fileChange/outputDelta': DeltaSchema,
   'item/fileChange/requestApproval': FileApprovalSchema,
   'item/started': ItemNotificationSchema,
+  'item/tool/requestUserInput': UserInputSchema,
   'serverRequest/resolved': RequestResolvedSchema,
   'turn/completed': TurnNotificationSchema,
   'turn/started': TurnNotificationSchema

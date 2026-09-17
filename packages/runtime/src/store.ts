@@ -15,7 +15,7 @@ import { parseEvent, startedEvent, type TerminalOutcome, terminalEvent } from '.
 import { RuntimeError } from './errors'
 import { acquireDirectoryLock, type DirectoryLock } from './lock'
 import * as schema from './schema'
-import { approvals, events, projects, runs, sessions } from './schema'
+import { approvals, events, inputRequests, projects, runs, sessions } from './schema'
 import { subscribeToRun } from './subscription'
 import {
   ArchivedSchema,
@@ -36,6 +36,8 @@ import type {
   Approval,
   ApprovalDecision,
   EventEnvelope,
+  InputAnswers,
+  InputRequest,
   Page,
   Project,
   Run,
@@ -52,9 +54,27 @@ const ApprovalRequestSchema = v.strictObject({
   kind: v.picklist(['command', 'file-change']),
   nativeRequestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())])
 })
+const InputRequestSchema = v.strictObject({
+  nativeRequestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())]),
+  questions: v.pipe(
+    v.array(
+      v.strictObject({
+        header: v.string(),
+        id: SessionIdSchema,
+        isOther: v.optional(v.boolean()),
+        isSecret: v.optional(v.boolean()),
+        options: v.optional(v.nullable(v.array(v.strictObject({ description: v.string(), label: SessionIdSchema })))),
+        question: SessionIdSchema
+      })
+    ),
+    v.minLength(1),
+    v.check((questions) => new Set(questions.map(({ id }) => id)).size === questions.length)
+  )
+})
+const InputAnswersSchema = v.record(SessionIdSchema, v.pipe(v.array(SessionIdSchema), v.minLength(1)))
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url))
 const relations = defineRelations(schema)
-const activeStatuses = ['starting', 'running', 'waiting_approval', 'cancelling'] as const
+const activeStatuses = ['starting', 'running', 'waiting_approval', 'waiting_input', 'cancelling'] as const
 const sessionSelection = { ...getTableColumns(sessions), activeRunId: runs.id }
 
 /**
@@ -122,6 +142,23 @@ const findRequestedRun = async (
     throw new RuntimeError('REQUEST_CONFLICT', 'Request ID was already used with different input')
   }
   return toRun(row)
+}
+
+const refreshWaiting = async (tx: Transaction, runId: string): Promise<void> => {
+  const [input] = await tx
+    .select({ id: inputRequests.id })
+    .from(inputRequests)
+    .where(and(eq(inputRequests.runId, runId), inArray(inputRequests.status, ['pending', 'responding'])))
+    .limit(1)
+  const [approval] = await tx
+    .select({ id: approvals.id })
+    .from(approvals)
+    .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'responding'])))
+    .limit(1)
+  await tx
+    .update(runs)
+    .set({ status: input ? 'waiting_input' : approval ? 'waiting_approval' : 'running' })
+    .where(and(eq(runs.id, runId), inArray(runs.status, ['starting', 'running', 'waiting_approval', 'waiting_input'])))
 }
 
 /**
@@ -438,7 +475,7 @@ export class SessionStore {
         })
         .onConflictDoNothing({
           target: runs.sessionId,
-          where: sql`${runs.status} in ('starting', 'running', 'waiting_approval', 'cancelling')`
+          where: sql`${runs.status} in ('starting', 'running', 'waiting_approval', 'waiting_input', 'cancelling')`
         })
         .returning()
       if (!inserted) {
@@ -551,6 +588,22 @@ export class SessionStore {
           })
         )
       }
+      const expiredInputs = await tx
+        .update(inputRequests)
+        .set({ status: 'expired' })
+        .where(and(eq(inputRequests.runId, runId), inArray(inputRequests.status, ['pending', 'responding'])))
+        .returning()
+      for (const input of expiredInputs) {
+        await persistEvent(
+          tx,
+          runId,
+          parseEvent({
+            name: 'runtime.input.resolved',
+            type: EventType.CUSTOM,
+            value: { inputId: input.id, status: 'expired' }
+          })
+        )
+      }
       await persistEvent(tx, runId, event)
       return true
     })
@@ -586,10 +639,7 @@ export class SessionStore {
       if (!inserted) {
         throw new Error('Approval insert returned no row')
       }
-      await tx
-        .update(runs)
-        .set({ status: 'waiting_approval' })
-        .where(and(eq(runs.id, runId), inArray(runs.status, ['starting', 'running'])))
+      await refreshWaiting(tx, runId)
       const { nativeRequestId: _nativeRequestId, ...publicApproval } = inserted
       await persistEvent(
         tx,
@@ -668,17 +718,114 @@ export class SessionStore {
           value: { approvalId: approval.id, decision: approval.decision, status: approval.status }
         })
       )
-      const [remaining] = await tx
-        .select({ id: approvals.id })
-        .from(approvals)
-        .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'responding'])))
-        .limit(1)
-      if (!remaining) {
-        await tx
-          .update(runs)
-          .set({ status: 'running' })
-          .where(and(eq(runs.id, runId), eq(runs.status, 'waiting_approval')))
+      await refreshWaiting(tx, runId)
+    })
+    this.notifyRunChange(runId)
+  }
+
+  async requestInput(runId: string, request: Pick<InputRequest, 'nativeRequestId' | 'questions'>): Promise<void> {
+    const validated = parseInput(InputRequestSchema, request)
+    await this.db.transaction(async (tx) => {
+      const run = await requireRun(tx, runId)
+      if (!activeStatuses.some((status) => status === run.status)) {
+        throw new RuntimeError('RUN_TERMINAL', 'Run is terminal')
       }
+      const [row] = await tx
+        .insert(inputRequests)
+        .values({ ...validated, id: randomUUID(), runId, status: 'pending' })
+        .onConflictDoNothing()
+        .returning()
+      if (!row) {
+        return
+      }
+      await refreshWaiting(tx, runId)
+      const { nativeRequestId: _nativeRequestId, ...publicInput } = row
+      await persistEvent(
+        tx,
+        runId,
+        parseEvent({ name: 'runtime.input.requested', type: EventType.CUSTOM, value: publicInput })
+      )
+    })
+    this.notifyRunChange(runId)
+  }
+
+  async listPendingInputs(runId: string): Promise<InputRequest[]> {
+    await this.getRun(runId)
+    return this.db
+      .select()
+      .from(inputRequests)
+      .where(and(eq(inputRequests.runId, runId), inArray(inputRequests.status, ['pending', 'responding'])))
+      .orderBy(asc(inputRequests.id))
+  }
+
+  async claimInput(runId: string, inputId: string, answers: InputAnswers): Promise<InputRequest> {
+    parseInput(SessionIdSchema, runId)
+    parseInput(SessionIdSchema, inputId)
+    const validated = parseInput(InputAnswersSchema, answers)
+    return await this.db.transaction(async (tx) => {
+      const condition = and(eq(inputRequests.runId, runId), eq(inputRequests.id, inputId))
+      const [request] = await tx.select().from(inputRequests).where(condition)
+      if (!request) {
+        throw new RuntimeError('INPUT_NOT_FOUND', 'Input request not found for run')
+      }
+      if (request.status !== 'pending') {
+        throw new RuntimeError('INPUT_NOT_PENDING', 'Input request is not pending')
+      }
+      const run = await requireRun(tx, runId)
+      if (!['running', 'waiting_input', 'waiting_approval'].includes(run.status)) {
+        throw new RuntimeError('INPUT_NOT_PENDING', 'Run no longer accepts answers')
+      }
+      if (
+        Object.keys(validated).length !== request.questions.length ||
+        request.questions.some(({ id }) => !Object.hasOwn(validated, id))
+      ) {
+        throw new RuntimeError('INVALID_INPUT', 'Answer each requested question exactly once')
+      }
+      const [claimed] = await tx
+        .update(inputRequests)
+        .set({ answers: validated, status: 'responding' })
+        .where(and(condition, eq(inputRequests.status, 'pending')))
+        .returning()
+      if (!claimed) {
+        throw new RuntimeError('INPUT_NOT_PENDING', 'Input request is not pending')
+      }
+      return claimed
+    })
+  }
+
+  async resolveInput(runId: string, nativeRequestId: string | number, responseAttempted?: boolean): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await requireRun(tx, runId)
+      const [row] = await tx
+        .update(inputRequests)
+        .set({
+          answers: responseAttempted === false ? null : sql`${inputRequests.answers}`,
+          status:
+            responseAttempted === false
+              ? 'expired'
+              : sql`case when ${inputRequests.status} = 'responding' then 'resolved' else 'expired' end`
+        })
+        .where(
+          and(
+            eq(inputRequests.runId, runId),
+            eq(inputRequests.nativeRequestId, nativeRequestId),
+            inArray(inputRequests.status, ['pending', 'responding'])
+          )
+        )
+        .returning()
+      if (!row) {
+        return
+      }
+      await persistEvent(
+        tx,
+        runId,
+        parseEvent({
+          name: 'runtime.input.resolved',
+          type: EventType.CUSTOM,
+          value: { inputId: row.id, status: row.status }
+        })
+      )
+      await refreshWaiting(tx, runId)
     })
     this.notifyRunChange(runId)
   }

@@ -3,6 +3,7 @@
 import: '@qingshaner/devtools/cspell'
 
 ignorePaths:
+  - '**/*/drizzle/**'
   - packages/runtime-codex/src/schemas/**
   - .gitignore
   - package-lock.json

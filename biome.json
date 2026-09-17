@@ -2,7 +2,7 @@
   "$schema": "node_modules/@biomejs/biome/configuration_schema.json",
   "extends": ["@qingshaner/devtools/biome"],
   "files": {
-    "includes": ["**", "!!packages/runtime-codex/src/schemas"]
+    "includes": ["**", "!!packages/runtime-codex/src/schemas", "!!packages/**/drizzle"]
   },
   "overrides": [
     {

@@ -59,7 +59,7 @@ test('persists input before notification and continues the same run after one cl
   expect(events.map(({ event }) => event.type)).toEqual(['RUN_STARTED', 'CUSTOM', 'CUSTOM', 'RUN_FINISHED'])
 })
 
-test('rejects cross-run answers and never resends an uncertain response', async () => {
+test('rejects cross-run answers and never repeats an uncertain response', async () => {
   await adapter.push(runId, { kind: 'input', request: { nativeRequestId: '1', questions } })
   const [request] = await manager.listPendingInputs(runId)
   if (!request) {

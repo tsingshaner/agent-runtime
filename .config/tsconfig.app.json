@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "lib": ["ESNext"],
     "paths": {
       "@internal/shared": ["../packages/shared/src/index.ts"],

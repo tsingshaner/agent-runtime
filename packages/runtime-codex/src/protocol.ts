@@ -58,7 +58,12 @@ const EnvelopeSchema = v.union([
   v.strictObject({ ...optionalVersion, id: IdSchema, result: JsonSchema }),
   v.strictObject({ ...optionalVersion, error: ErrorSchema, id: IdSchema }),
   v.strictObject({ ...optionalVersion, id: IdSchema, method: v.string(), params: v.optional(JsonSchema, null) }),
-  v.strictObject({ ...optionalVersion, method: v.string(), params: v.optional(JsonSchema, null) })
+  v.strictObject({
+    ...optionalVersion,
+    emittedAtMs: v.optional(v.pipe(v.number(), v.safeInteger())),
+    method: v.string(),
+    params: v.optional(JsonSchema, null)
+  })
 ])
 
 export type Frame =

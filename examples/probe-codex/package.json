@@ -1,0 +1,12 @@
+{
+  "name": "@internal/probe-codex",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "pnpm --workspace-root build && tsdown probe.ts --no-config --format esm --out-dir dist && node main.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@qingshaner/runtime": "workspace:*"
+  }
+}

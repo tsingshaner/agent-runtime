@@ -1,0 +1,17 @@
+{
+  "name": "@internal/probe-deepagents",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "probe": "node probe.ts",
+    "test": "pnpm --workspace-root exec vitest run --project @internal/probe-deepagents"
+  },
+  "dependencies": {
+    "@langchain/core": "1.2.11",
+    "@langchain/langgraph": "1.4.15",
+    "@langchain/langgraph-checkpoint-sqlite": "1.0.4",
+    "deepagents": "1.13.5",
+    "langchain": "1.5.11",
+    "zod": "4.6.5"
+  }
+}

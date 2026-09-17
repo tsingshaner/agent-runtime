@@ -9,6 +9,13 @@
       "entry": ["*.test.ts"],
       "project": ["*.ts"]
     },
+    "examples/probe-codex": {
+      "entry": ["*.test.ts", "mcp.ts"],
+      "project": ["*.ts"]
+    },
+    "examples/probe-dsh": {
+      "ignoreDependencies": ["@deepseek-ai/dsh"]
+    },
     "packages/*": {
       "entry": ["src/index.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts"]

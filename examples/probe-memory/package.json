@@ -1,0 +1,14 @@
+{
+  "name": "@internal/probe-memory",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "probe": "node main.ts"
+  },
+  "dependencies": {
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1"
+  }
+}

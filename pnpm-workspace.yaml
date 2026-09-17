@@ -5,7 +5,13 @@ packages:
 
 allowBuilds:
   '@biomejs/biome': true
+  '@deepseek-ai/dsh-subprocess-local': false
+  '@google/genai': false
+  better-sqlite3: true
   esbuild: true
+  koffi: false
+  node-pty: false
+  protobufjs: false
   simple-git-hooks: true
 
 minimumReleaseAgeExclude:
@@ -13,3 +19,4 @@ minimumReleaseAgeExclude:
   - '@qingshaner/utility-server@1.1.0'
   - '@qingshaner/utility-shared@1.1.0'
   - '@qingshaner/utility@1.1.0'
+  - deepagents@1.13.5

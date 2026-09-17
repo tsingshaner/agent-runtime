@@ -15,6 +15,13 @@ ignorePaths:
   - bun.lock.json
 
 words:
+  - modelcontextprotocol
+  - genai
+  - koffi
+  - protobufjs
+  - deepseek
+  - langgraph
+  - tencentdb
   - deepagents
   - langchain
   - Cordis

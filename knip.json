@@ -20,6 +20,9 @@
       "entry": ["src/index.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
+    "packages/memory": {
+      "entry": ["src/index.ts", "test/gateway.fixture.ts"]
+    },
     "packages/shared": {
       "ignoreDependencies": ["es-toolkit"]
     }

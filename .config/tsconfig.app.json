@@ -4,6 +4,7 @@
     "lib": ["ESNext"],
     "paths": {
       "@internal/shared": ["../packages/shared/src/index.ts"],
+      "@qingshaner/memory": ["../packages/memory/src/index.ts"],
       "@qingshaner/runtime": ["../packages/runtime/src/index.ts"],
       "@qingshaner/runtime-codex": ["../packages/runtime-codex/src/index.ts"]
     },

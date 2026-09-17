@@ -1,0 +1,12 @@
+{
+  "name": "@internal/memory-service-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "pnpm --workspace-root build && node --env-file-if-exists=../../.env.local main.ts"
+  },
+  "dependencies": {
+    "@qingshaner/memory": "workspace:*",
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1"
+  }
+}

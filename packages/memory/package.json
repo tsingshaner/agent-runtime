@@ -1,0 +1,26 @@
+{
+  "name": "@qingshaner/memory",
+  "version": "0.0.0",
+  "description": "Project memory and owned MemoryCore lifecycle",
+  "type": "module",
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

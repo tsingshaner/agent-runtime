@@ -85,6 +85,7 @@ const ManagerOptionsSchema = v.strictObject({
  * Owns durable sessions, background runs, approvals, and registered runtime adapters.
  */
 export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
+  private sharedUpdating = false
   private readonly updating = new Map<string, Promise<void>>()
   private readonly preparations = new Map<string, Promise<void>>()
   private readonly memoryTasks = new Set<Promise<void>>()
@@ -142,6 +143,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
 
   /** Create a stable project without starting a runtime. */
   async createProject(input: CreateProjectInput): Promise<Project> {
+    this.assertProjectReady('')
     return await this.control(async () => {
       const value = parseInput(
         v.strictObject({
@@ -723,7 +725,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
   }
 
   private assertProjectReady = (projectId: string): void => {
-    if (this.updating.has(projectId)) {
+    if (this.sharedUpdating || this.updating.has(projectId)) {
       throw new RuntimeError('RESOURCES_UPDATING', 'Project resources are updating')
     }
   }
@@ -754,7 +756,21 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     return pending
   }
 
-  /** Stop project admission, drain current runs, apply changes, and rebuild the single project process. */
+  private applyResources = async (ids: string[], change: () => Promise<void>): Promise<void> => {
+    await Promise.all([...this.active.values()].filter((run) => ids.includes(run.projectId)).map((run) => run.done))
+    this.assertRunning()
+    await change()
+    await Promise.all(ids.map((id) => this.resources?.release(id)))
+    for (const id of ids) {
+      for (const adapter of this.adapters.values()) {
+        if (adapter.configureProject) {
+          await this.prepareProjectResources(id, adapter)
+        }
+      }
+    }
+  }
+
+  /** Pause project admission while applying bindings after all existing runs finish. */
   updateProjectResources = (projectId: string, change: () => Promise<void>): Promise<void> => {
     this.assertOpen()
     parseInput(NonBlankString, projectId)
@@ -763,20 +779,36 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     const pending = (async () => {
       await Promise.allSettled(accepted)
       await this.storage(() => this.store.getProject(projectId))
-      await Promise.all([...this.active.values()].filter((run) => run.projectId === projectId).map((run) => run.done))
-      this.assertRunning()
-      await change()
-      await this.resources?.release(projectId)
-      for (const adapter of this.adapters.values()) {
-        if (adapter.configureProject) {
-          await this.prepareProjectResources(projectId, adapter)
-        }
-      }
+      await this.applyResources([projectId], change)
     })().finally(() => {
       this.updating.delete(projectId)
       this.controls.delete(pending)
     })
     this.updating.set(projectId, pending)
+    this.controls.add(pending)
+    return pending
+  }
+
+  /** Shared skill/MCP changes must block new projects and bindings before enumerating consumers. */
+  updateSharedResources = (change: () => Promise<void>): Promise<void> => {
+    this.assertOpen()
+    this.assertProjectReady('')
+    const accepted = [...this.controls]
+    this.sharedUpdating = true
+    const pending = (async () => {
+      await Promise.allSettled(accepted)
+      const ids: string[] = []
+      let cursor: string | undefined
+      do {
+        const page = await this.storage(() => this.store.listProjects({ cursor, limit: 200 }))
+        ids.push(...page.items.map(({ id }) => id))
+        cursor = page.nextCursor ?? undefined
+      } while (cursor)
+      await this.applyResources(ids, change)
+    })().finally(() => {
+      this.sharedUpdating = false
+      this.controls.delete(pending)
+    })
     this.controls.add(pending)
     return pending
   }

@@ -184,8 +184,15 @@ export class Mcp {
     return { id, ...config }
   }
   get = async (id: string): Promise<McpServer> => this.lookup(await this.load(), id)
-  list = async (): Promise<McpServer[]> =>
-    Object.entries((await this.load()).configs).map(([id, config]) => ({ id, ...config }))
+  list = async (projectId?: string): Promise<(McpServer & { enabled?: boolean })[]> => {
+    const state = await this.load()
+    if (projectId === undefined) {
+      return Object.entries(state.configs).map(([id, config]) => ({ id, ...config }))
+    }
+    parse(nonempty, projectId)
+    const bindings = Object.hasOwn(state.bindings, projectId) ? state.bindings[projectId] : undefined
+    return Object.entries(bindings ?? {}).map(([id, enabled]) => ({ ...this.lookup(state, id), enabled }))
+  }
   delete = (id: string): Promise<void> =>
     this.mutate((state) => {
       this.lookup(state, id)

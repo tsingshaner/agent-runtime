@@ -168,3 +168,35 @@ test('checks the actual upstream connection and blocks the next run after a prot
     await rm(dir, { force: true, recursive: true })
   }
 })
+
+test('shared mutation gates project creation and binding before enumeration and drains active runs', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'runtime-shared-update-'))
+  const adapter = new ManualAdapter()
+  const manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+  try {
+    await manager.createProject({ id: 'p', name: 'p' })
+    const session = await manager.createSession({ cwd: dir, model: 'test', projectId: 'p', runtime: 'manual' })
+    const { runId } = await manager.run(session.id, { text: 'waiting' })
+    await adapter.waitStarted(runId)
+    let changed = false
+    const updating = manager.updateSharedResources(() => {
+      changed = true
+      return Promise.resolve()
+    })
+    await expect(manager.createProject({ id: 'late', name: 'late' })).rejects.toMatchObject({
+      code: 'RESOURCES_UPDATING'
+    })
+    expect(() => manager.updateProjectResources('p', () => Promise.resolve())).toThrow(
+      expect.objectContaining({ code: 'RESOURCES_UPDATING' })
+    )
+    await expect(manager.run(session.id, { text: 'late' })).rejects.toMatchObject({ code: 'RESOURCES_UPDATING' })
+    expect(changed).toBe(false)
+    await manager.cancel(runId)
+    await updating
+    expect(changed).toBe(true)
+    expect((await manager.createProject({ id: 'late', name: 'late' })).id).toBe('late')
+  } finally {
+    await manager.dispose()
+    await rm(dir, { force: true, recursive: true })
+  }
+})

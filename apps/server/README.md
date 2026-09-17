@@ -32,3 +32,37 @@ Explicit real smoke: `RUN_CODEX_SMOKE=1 CODEX_MODEL=<model> pnpm --filter @inter
 On 2026-09-17, Codex 0.153.4 / gpt-6-astra passed real submission, text SSE,
 unique success and cursor replay. Native approval/input/cancellation were not
 triggered (UNVERIFIED); controlled HTTP tests cover those routes.
+
+
+Resource routes (same bearer authentication):
+
+- `GET/POST /skills`, `GET/DELETE /skills/:id`, `GET/PATCH /skills/:id/file`
+- `GET/POST /mcp`, `GET/PATCH/DELETE /mcp/:id`, `POST /mcp/:id/probe`
+- `GET/POST/DELETE /projects/:id/knowledge/binding`
+- `GET/POST/PATCH/DELETE /projects/:id/knowledge/documents`, `GET /projects/:id/knowledge/search`
+- `GET /projects/:id/skills` and `/mcp`; `POST/DELETE` either with `/:resourceId`
+- `POST /projects/:id/resources` to reapply external changes
+- `GET /projects/:id/memory`, `/memory/search`, `/memory/conversations`, `/memory/core`
+- `PATCH /projects/:id/memory/:memoryId` and `/memory/core`; `DELETE /memory` or `/memory/conversations` with `ids`
+- `GET /runs/:id/memory-write`, `GET /projects/:id/memory-writes`
+- `GET /memory-core`, `POST /memory-core/install`, `/start`, `/stop`
+
+Bindings drain affected runs before reconfiguration. Shared Skill/MCP edits gate
+all projects until existing runs drain and configuration is reapplied. Source
+Skill directories are copied on import and preserved on deletion. Memory write
+receipts remain separate from Run success.
+
+Set `MEMORY_ENDPOINT` to attach a gateway, with its credential in `MEMORY_API_KEY`.
+Set `MEMORY_MODEL` and `MEMORY_BASE_URL` to enable owned Core lifecycle routes;
+the shared default gateway endpoint is `http://127.0.0.1:8420`. Model credentials
+are referenced by `MEMORY_MODEL_API_KEY_ENV` (default `DEEPSEEK_API_KEY`).
+`MEMORY_SERVICE_ID` defaults to `agent-runtime`. Installation and startup require
+explicit API calls; shutdown stops only the owned process. Core is pinned to
+1.0.2-beta.1; existing data persists across stop/start.
+
+Explicit resource smoke:
+`RUN_HTTP_RESOURCE_SMOKE=1 CODEX_MODEL=gpt-6-astra MEMORY_MODEL=deepseek-flash MEMORY_SERVICE_DIR=/tmp/agent-runtime-owned-memory-smoke pnpm --filter @internal/server smoke:resources`.
+The script loads `.env.local` without printing credentials. On 2026-09-17 this
+passed HTTP resource CRUD, same-session resource updates, native MCP approvals,
+accepted memory receipts, Core lifecycle and L0 persistence across restart.
+Native input requests and cancellation remain unverified by this real smoke.

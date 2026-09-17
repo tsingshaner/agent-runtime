@@ -9,41 +9,9 @@ import * as v from 'valibot'
 
 import type { ManagerOptions, RuntimeAdapter } from '@qingshaner/runtime'
 
-const object = v.record(v.string(), v.unknown())
-const parse = <S extends v.GenericSchema>(schema: S, input: unknown): v.InferOutput<S> => {
-  const result = v.safeParse(schema, input)
-  if (!result.success) {
-    throw new RuntimeError('INVALID_INPUT', 'Invalid input')
-  }
-  return result.output
-}
-const body = async (request: IncomingMessage) => {
-  if (request.headers['content-type']?.split(';')[0] !== 'application/json') {
-    throw new RuntimeError('INVALID_INPUT', 'Expected JSON')
-  }
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of request) {
-    size += chunk.length
-    if (size > 1024 * 1024) {
-      throw new RuntimeError('INVALID_INPUT', 'Body too large')
-    }
-    chunks.push(chunk)
-  }
-  try {
-    return parse(object, JSON.parse(Buffer.concat(chunks).toString()))
-  } catch {
-    throw new RuntimeError('INVALID_INPUT', 'Invalid JSON')
-  }
-}
-const json = (response: ServerResponse, value: unknown, status = 200) => {
-  response.writeHead(status, {
-    'cache-control': 'no-store',
-    'content-type': 'application/json',
-    'x-content-type-options': 'nosniff'
-  })
-  response.end(JSON.stringify(value ?? {}))
-}
+import { body, json, parse } from './http.ts'
+import { type ResourceServerOptions, resourceRoute } from './resources.ts'
+
 const page = (url: URL) => {
   const result: { limit?: number; cursor?: string } = {}
   if (url.searchParams.has('limit')) {
@@ -55,9 +23,11 @@ const page = (url: URL) => {
   return result
 }
 const errorCode = (error: unknown) =>
-  error instanceof RuntimeError && /^[A-Z_]+$/.test(error.code) ? error.code : 'INTERNAL_ERROR'
+  error instanceof Error && 'code' in error && typeof error.code === 'string' && /^[A-Z_]+$/.test(error.code)
+    ? error.code
+    : 'INTERNAL_ERROR'
 const statusCode = (code: string) =>
-  code === 'INVALID_INPUT'
+  ['INVALID_INPUT', 'INVALID_PATH', 'INVALID_CONFIG', 'INVALID_SKILL'].includes(code)
     ? 400
     : code.endsWith('_NOT_FOUND')
       ? 404
@@ -69,7 +39,7 @@ const statusCode = (code: string) =>
 
 /** Own one Manager and loopback HTTP listener. The returned token is never logged. */
 export const startServer = async <A extends RuntimeAdapter>(
-  options: ManagerOptions<A> & { port?: number; origins?: string[] }
+  options: ManagerOptions<A> & ResourceServerOptions & { port?: number; origins?: string[] }
 ) => {
   parse(
     v.strictObject({
@@ -78,7 +48,13 @@ export const startServer = async <A extends RuntimeAdapter>(
     }),
     { origins: options.origins, port: options.port }
   )
-  const manager = await RuntimeManager.open({ dataDir: options.dataDir, runtimes: options.runtimes })
+  const manager = await RuntimeManager.open({
+    dataDir: options.dataDir,
+    memory: options.memory,
+    memoryTimeoutMs: options.memoryTimeoutMs,
+    resources: options.resources,
+    runtimes: options.runtimes
+  })
   const token = randomBytes(32).toString('hex')
   const expected = Buffer.from(`Bearer ${token}`)
   const subscriptions = new Set<AbortController>()
@@ -158,6 +134,10 @@ export const startServer = async <A extends RuntimeAdapter>(
       parts = target.pathname.split('/').filter(Boolean).map(decodeURIComponent)
     } catch {
       throw new RuntimeError('INVALID_INPUT', 'Invalid URL')
+    }
+    const managed = await resourceRoute(request, parts, target, manager, options)
+    if (managed) {
+      return json(response, managed.value)
     }
     const [resource, id = '', action, item = ''] = parts
     const method = request.method
@@ -246,7 +226,11 @@ export const startServer = async <A extends RuntimeAdapter>(
     server.listen(options.port ?? 0, '127.0.0.1')
     await once(server, 'listening')
   } catch (error) {
-    await manager.dispose()
+    try {
+      await manager.dispose()
+    } finally {
+      await options.memoryCore?.dispose()
+    }
     throw error
   }
   const address = server.address()
@@ -266,7 +250,11 @@ export const startServer = async <A extends RuntimeAdapter>(
       try {
         await manager.dispose()
       } finally {
-        await closed
+        try {
+          await options.memoryCore?.dispose()
+        } finally {
+          await closed
+        }
       }
     })())
   return { close, token, url }

@@ -4,11 +4,16 @@
   "type": "module",
   "scripts": {
     "start": "pnpm --workspace-root build && node src/main.ts",
-    "smoke": "pnpm --workspace-root build && node smoke.ts"
+    "smoke": "pnpm --workspace-root build && node smoke.ts",
+    "smoke:resources": "pnpm --workspace-root build && node --env-file-if-exists=../../.env.local resources-smoke.ts"
   },
   "dependencies": {
     "@qingshaner/runtime": "workspace:*",
     "@qingshaner/runtime-codex": "workspace:*",
-    "valibot": "1.5.0"
+    "valibot": "1.5.0",
+    "@qingshaner/knowledge": "workspace:*",
+    "@qingshaner/skill": "workspace:*",
+    "@qingshaner/mcp": "workspace:*",
+    "@qingshaner/memory": "workspace:*"
   }
 }

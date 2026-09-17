@@ -20,3 +20,5 @@ minimumReleaseAgeExclude:
   - '@qingshaner/utility-shared@1.1.0'
   - '@qingshaner/utility@1.1.0'
   - deepagents@1.13.5
+  - '@tanstack/ai-client@0.32.0'
+  - '@tanstack/ai@0.55.0'

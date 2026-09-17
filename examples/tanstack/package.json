@@ -1,0 +1,14 @@
+{
+  "name": "@internal/tanstack-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node main.ts",
+    "smoke": "pnpm -w build && node smoke.ts"
+  },
+  "dependencies": {
+    "@qingshaner/runtime": "workspace:*",
+    "@qingshaner/runtime-codex": "workspace:*",
+    "@tanstack/ai-client": "0.32.0"
+  }
+}

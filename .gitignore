@@ -3,6 +3,7 @@ cache
 .cache
 coverage
 node_modules
+*.env.local
 
 .eslintcache
 .changeset/README.md

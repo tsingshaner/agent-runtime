@@ -39,6 +39,7 @@ import type {
   Page,
   Project,
   Run,
+  RunInput,
   Session,
   SessionFilter,
   UpdateProjectInput
@@ -94,11 +95,33 @@ type Transaction = Parameters<Parameters<PgliteDatabase<typeof relations>['trans
  * Normalize persisted run timestamps to ISO strings.
  */
 const toRun = (row: typeof runs.$inferSelect): Run => {
+  const { requestText: _requestText, ...publicRun } = row
   return {
-    ...row,
+    ...publicRun,
     createdAt: new Date(row.createdAt).toISOString(),
     endedAt: row.endedAt === null ? null : new Date(row.endedAt).toISOString()
   }
+}
+
+const findRequestedRun = async (
+  db: Transaction | PgliteDatabase<typeof relations>,
+  sessionId: string,
+  input: RunInput
+): Promise<Run | undefined> => {
+  if (input.requestId === undefined) {
+    return undefined
+  }
+  const [row] = await db
+    .select()
+    .from(runs)
+    .where(and(eq(runs.sessionId, sessionId), eq(runs.requestId, input.requestId)))
+  if (!row) {
+    return undefined
+  }
+  if (row.requestText !== input.text) {
+    throw new RuntimeError('REQUEST_CONFLICT', 'Request ID was already used with different input')
+  }
+  return toRun(row)
 }
 
 /**
@@ -382,13 +405,21 @@ export class SessionStore {
     })
   }
 
+  getRequestedRun(sessionId: string, input: RunInput): Promise<Run | undefined> {
+    return findRequestedRun(this.db, sessionId, input)
+  }
+
   /**
    * Atomically reserve the session's active run and persist its RUN_STARTED event.
    */
-  async beginRun(sessionId: string, runId: string): Promise<Run> {
+  async beginRun(sessionId: string, runId: string, input?: RunInput): Promise<Run> {
     parseInput(SessionIdSchema, sessionId)
     parseInput(SessionIdSchema, runId)
     const run = await this.db.transaction(async (tx) => {
+      const existing = input && (await findRequestedRun(tx, sessionId, input))
+      if (existing) {
+        return existing
+      }
       const [session] = await tx.select().from(sessions).where(eq(sessions.id, sessionId))
       if (!session) {
         throw new RuntimeError('SESSION_NOT_FOUND', `Session not found: ${sessionId}`)
@@ -398,7 +429,13 @@ export class SessionStore {
       }
       const [inserted] = await tx
         .insert(runs)
-        .values({ id: runId, sessionId, status: 'starting' })
+        .values({
+          id: runId,
+          requestId: input?.requestId,
+          requestText: input?.requestId === undefined ? undefined : input.text,
+          sessionId,
+          status: 'starting'
+        })
         .onConflictDoNothing({
           target: runs.sessionId,
           where: sql`${runs.status} in ('starting', 'running', 'waiting_approval', 'cancelling')`

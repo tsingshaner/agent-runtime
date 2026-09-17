@@ -59,3 +59,7 @@ try {
 目录绑定是项目元数据，不是访问沙箱；会话创建仍单独校验实际 `cwd`。更新项目目录不会重写既有会话的原生工作目录。
 旧库按原 `projectId` 回填项目并保留会话、原生 ID、归档和历史；已存的 `options.model` 提升为公共字段。
 未保存模型的旧会话以 `model: null` 表示，续接仍沿用原适配器的既有配置，不凭空选择新模型。
+
+`run(sessionId, { text, requestId? })` 支持按会话去重：相同 requestId 和原样文本返回原 Run，不同文本返回 REQUEST_CONFLICT。
+不传 requestId 始终视为新请求。重启、归档、运行失败或事件清理后仍可找回原记录，不重放原生执行。
+SDK 示例可同时设置 SESSION_ID 和 REQUEST_ID 重试同一请求。

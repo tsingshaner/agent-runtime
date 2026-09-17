@@ -20,6 +20,7 @@ export type {
   Page,
   Project,
   Run,
+  RunInput,
   RunStatus,
   RuntimeAdapter,
   RuntimeFault,

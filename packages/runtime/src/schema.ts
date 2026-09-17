@@ -51,6 +51,8 @@ export const runs = pgTable(
     id: text().primaryKey(),
     lastSequence: integer('last_sequence').notNull().default(0),
     nativeTurnId: text('native_turn_id'),
+    requestId: text('request_id'),
+    requestText: text('request_text'),
     sessionId: text('session_id')
       .notNull()
       .references(() => sessions.id),
@@ -61,6 +63,7 @@ export const runs = pgTable(
       'runs_status_check',
       sql`${table.status} in ('starting', 'running', 'waiting_approval', 'cancelling', 'succeeded', 'failed', 'cancelled', 'interrupted')`
     ),
+    unique().on(table.sessionId, table.requestId),
     check('runs_last_sequence_check', sql`${table.lastSequence} >= 0`),
     uniqueIndex('one_active_run')
       .on(table.sessionId)

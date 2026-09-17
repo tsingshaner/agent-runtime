@@ -23,7 +23,10 @@ try {
     ? await manager.resumeSession(process.env.SESSION_ID)
     : await manager.createSession({ cwd: process.cwd(), model, projectId: 'demo', runtime: 'codex' })
   console.log({ sessionId: session.id })
-  const { runId } = await manager.run(session.id, { text: 'Briefly describe this directory.' })
+  const { runId } = await manager.run(session.id, {
+    requestId: process.env.REQUEST_ID,
+    text: 'Briefly describe this directory.'
+  })
   for await (const envelope of manager.subscribe(runId)) {
     console.log(JSON.stringify(envelope))
     if (envelope.event.type === 'CUSTOM' && envelope.event.name === 'runtime.approval.requested') {

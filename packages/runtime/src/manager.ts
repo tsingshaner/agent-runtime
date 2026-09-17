@@ -21,6 +21,7 @@ import type {
   Page,
   Project,
   Run,
+  RunInput,
   RuntimeAdapter,
   Session,
   SessionFilter,
@@ -45,7 +46,7 @@ const CreateSessionSchema = v.strictObject({
   runtime: NonBlankString,
   title: v.optional(TitleSchema)
 })
-const RunInputSchema = v.strictObject({ text: NonBlankString })
+const RunInputSchema = v.strictObject({ requestId: v.optional(NonBlankString), text: NonBlankString })
 const ManagerOptionsSchema = v.strictObject({
   dataDir: NonBlankString,
   runtimes: v.array(
@@ -285,14 +286,21 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @returns SDK session and run IDs for later queries, subscriptions, and cancellation.
    * @throws {@link RuntimeError} if the session is archived or already has an active run.
    */
-  async run(sessionId: string, input: { text: string }): Promise<{ runId: string; sessionId: string }> {
+  async run(sessionId: string, input: RunInput): Promise<{ runId: string; sessionId: string }> {
     return await this.control(async () => {
       const validated = parseInput(RunInputSchema, input)
       const session = await this.storage(() => this.store.getSession(sessionId))
       this.assertRunning()
+      const existing = await this.storage(() => this.store.getRequestedRun(sessionId, validated))
+      if (existing) {
+        return { runId: existing.id, sessionId }
+      }
       const adapter = this.getAdapter(session.runtime)
       const runId = randomUUID()
-      await this.storage(() => this.store.beginRun(sessionId, runId))
+      const run = await this.storage(() => this.store.beginRun(sessionId, runId, validated))
+      if (run.id !== runId) {
+        return { runId: run.id, sessionId }
+      }
       this.assertRunning()
       let signalReady!: () => void
       this.ready.set(
@@ -301,7 +309,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
           signalReady = resolve
         })
       )
-      const completion = this.drive(adapter, session, runId, validated, signalReady)
+      const completion = this.drive(adapter, session, runId, { text: validated.text }, signalReady)
         .catch((error: unknown) => {
           this.failStorage(error)
         })

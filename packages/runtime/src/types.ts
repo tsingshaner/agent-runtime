@@ -83,7 +83,14 @@ export interface Session {
 /**
  * A persisted execution attempt belonging to one managed session.
  */
+/** Optional request identity is scoped to the session; text is compared exactly. */
+export interface RunInput {
+  text: string
+  requestId?: string
+}
+
 export interface Run {
+  requestId: string | null
   id: string
   sessionId: string
   nativeTurnId: string | null

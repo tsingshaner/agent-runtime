@@ -1,5 +1,5 @@
 {
-  "name": "@qingshaner/knowledge",
+  "name": "@qingshaner/skill",
   "version": "0.0.0",
   "type": "module",
   "license": "ISC",
@@ -18,7 +18,8 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
+    "@internal/shared": "workspace:*",
     "valibot": "1.5.0",
-    "@internal/shared": "workspace:*"
+    "yaml": "2.9.1"
   }
 }

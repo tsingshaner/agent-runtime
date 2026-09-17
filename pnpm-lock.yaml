@@ -295,6 +295,9 @@ importers:
 
   packages/knowledge:
     dependencies:
+      '@internal/shared':
+        specifier: workspace:*
+        version: link:../shared
       valibot:
         specifier: 1.5.0
         version: 1.5.0(typescript@7.0.2)
@@ -340,6 +343,18 @@ importers:
       es-toolkit:
         specifier: ^1.52.0
         version: 1.52.0
+
+  packages/skill:
+    dependencies:
+      '@internal/shared':
+        specifier: workspace:*
+        version: link:../shared
+      valibot:
+        specifier: 1.5.0
+        version: 1.5.0(typescript@7.0.2)
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
 
 packages:
 

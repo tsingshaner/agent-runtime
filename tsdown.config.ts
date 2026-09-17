@@ -7,6 +7,7 @@ const packages = [
   ['runtime', '@qingshaner/runtime'],
   ['memory', '@qingshaner/memory'],
   ['knowledge', '@qingshaner/knowledge'],
+  ['skill', '@qingshaner/skill'],
   ['shared', '@internal/shared'],
   ['runtime-codex', '@qingshaner/runtime-codex']
 ] as const
@@ -27,13 +28,14 @@ export default defineConfig(
         '@qingshaner/utility',
         'drizzle-orm',
         'es-toolkit',
-        'valibot'
+        'valibot',
+        'yaml'
       ]
     },
     dts: {
       tsconfig: resolve(ROOT, 'tsconfig.build.json')
     },
-    entry: 'src/index.ts',
+    entry: directory === 'shared' ? ['src/index.ts', 'src/files.ts'] : 'src/index.ts',
     format: 'esm',
     name,
     outDir: 'dist',

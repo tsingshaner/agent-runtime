@@ -21,6 +21,10 @@
       "default": "./dist/index.mjs",
       "import": "./dist/index.mjs",
       "types": "./dist/index.d.mts"
+    },
+    "./files": {
+      "types": "./dist/files.d.mts",
+      "import": "./dist/files.mjs"
     }
   },
   "files": [

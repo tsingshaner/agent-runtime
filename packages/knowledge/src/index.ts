@@ -1,19 +1,11 @@
-import { randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
-import { link, lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
+import { join, relative } from 'node:path'
 
+import { atomicWrite, FileError as KnowledgeError, readRegularFile as read, resourcePath } from '@internal/shared/files'
 import * as v from 'valibot'
 
-export class KnowledgeError extends Error {
-  constructor(
-    readonly code: string,
-    message: string
-  ) {
-    super(message)
-    this.name = 'KnowledgeError'
-  }
-}
+export { FileError as KnowledgeError } from '@internal/shared/files'
+
 const nonempty = v.pipe(v.string(), v.minLength(1), v.maxLength(4096))
 const bindingSchema = v.record(nonempty, nonempty)
 const validate = <S extends v.GenericSchema>(schema: S, value: unknown): v.InferOutput<S> => {
@@ -23,50 +15,6 @@ const validate = <S extends v.GenericSchema>(schema: S, value: unknown): v.Infer
   }
   return result.output
 }
-const missing = (error: unknown) => error instanceof Error && 'code' in error && error.code === 'ENOENT'
-const read = async (path: string) => {
-  let handle: Awaited<ReturnType<typeof open>> | undefined
-  try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
-    if (!(await handle.stat()).isFile()) {
-      throw new KnowledgeError('INVALID_PATH', 'Expected a regular file')
-    }
-    return await handle.readFile('utf8')
-  } catch (error) {
-    if (missing(error)) {
-      throw new KnowledgeError('NOT_FOUND', 'Document not found')
-    }
-    if (error instanceof KnowledgeError) {
-      throw error
-    }
-    throw new KnowledgeError('INVALID_PATH', 'Document cannot be accessed safely')
-  } finally {
-    await handle?.close()
-  }
-}
-const atomicWrite = async (path: string, content: string, create = false) => {
-  const temporary = `${path}.${randomUUID()}.tmp`
-  const handle = await open(temporary, 'wx', 0o600)
-  try {
-    await handle.writeFile(content)
-    await handle.sync()
-    await handle.close()
-    if (create) {
-      await link(temporary, path)
-    } else {
-      await rename(temporary, path)
-    }
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
-      throw new KnowledgeError('ALREADY_EXISTS', 'Document already exists')
-    }
-    throw error
-  } finally {
-    await handle.close()
-    await rm(temporary, { force: true })
-  }
-}
-
 /** Markdown operations on explicitly bound local directories; no runtime dependency. */
 export class Knowledge {
   private queue: Promise<unknown> = Promise.resolve()
@@ -156,35 +104,10 @@ export class Knowledge {
   }
 
   private path = async (projectId: string, path: string): Promise<string> => {
-    if (
-      typeof path !== 'string' ||
-      isAbsolute(path) ||
-      path.includes('\\') ||
-      path.includes('\0') ||
-      !path.endsWith('.md') ||
-      path.split('/').some((part) => !part || part === '.' || part === '..')
-    ) {
-      throw new KnowledgeError('INVALID_PATH', 'Expected a relative Markdown path')
+    if (typeof path !== 'string' || !path.endsWith('.md')) {
+      throw new KnowledgeError('INVALID_PATH', 'Expected a Markdown path')
     }
-    const root = await this.binding(projectId)
-    const target = resolve(root, path)
-    if (relative(root, target).startsWith('..')) {
-      throw new KnowledgeError('INVALID_PATH', 'Path leaves binding')
-    }
-    let current = root
-    for (const part of path.split('/')) {
-      current = join(current, part)
-      try {
-        if ((await lstat(current)).isSymbolicLink()) {
-          throw new KnowledgeError('INVALID_PATH', 'Symbolic links are not supported')
-        }
-      } catch (error) {
-        if (!missing(error)) {
-          throw error
-        }
-      }
-    }
-    return target
+    return resourcePath(await this.binding(projectId), path)
   }
 
   list = async (projectId: string): Promise<string[]> => {

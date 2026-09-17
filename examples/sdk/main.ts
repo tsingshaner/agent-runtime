@@ -1,6 +1,7 @@
 // biome-ignore-all lint/suspicious/noConsole: CLI output is the example interface.
 import { createInterface } from 'node:readline/promises'
 
+import { ProjectMemory } from '@qingshaner/memory'
 import { RuntimeManager } from '@qingshaner/runtime'
 import { CodexRuntime } from '@qingshaner/runtime-codex'
 
@@ -10,6 +11,13 @@ if (!model) {
 }
 const manager = await RuntimeManager.open({
   dataDir: './.agent-runtime',
+  memory: process.env.MEMORY_ENDPOINT
+    ? new ProjectMemory({
+        apiKeyEnv: 'MEMORY_API_KEY',
+        endpoint: process.env.MEMORY_ENDPOINT,
+        serviceId: process.env.MEMORY_SERVICE_ID ?? 'agent-runtime'
+      })
+    : undefined,
   runtimes: [new CodexRuntime({ dataDir: './.agent-runtime/codex' })]
 })
 const terminal = process.stdin.isTTY ? createInterface({ input: process.stdin, output: process.stdout }) : undefined
@@ -57,6 +65,7 @@ try {
     }
   }
   console.log(await manager.getRun(runId))
+  console.log({ memoryWrite: await manager.getMemoryWrite(runId) })
 } finally {
   terminal?.close()
   await manager.dispose()

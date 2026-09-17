@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@qingshaner/runtime": "workspace:*",
-    "@qingshaner/runtime-codex": "workspace:*"
+    "@qingshaner/runtime-codex": "workspace:*",
+    "@qingshaner/memory": "workspace:*"
   }
 }

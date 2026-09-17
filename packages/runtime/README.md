@@ -71,3 +71,26 @@ InputEvent 的 runtime.input.requested / runtime.input.resolved 扩展在持久�
 批量审批仍使用 `listPendingApprovals` / `respondApproval`：batchId 和 batchIndex 标明成员与原生顺序。
 部分决定为 decided，收齐后全批进入 responding 并仅提交一次；原生确认前不标 resolved。
 工具审批使用 tool 种类；批次取消或重启后过期，结果不确定不自动重发。适配器提供 respondApprovalBatch 并在确认后发送 approval-batch-resolved。
+
+### Project memory
+
+Pass a `ProjectMemory` instance as `RuntimeManager.open({ memory, ... })`.
+Recall is bounded before execution; a timeout or service failure records a safe
+`Run.memoryError` and continues without context. Adapters receive optional
+`input.context` separately from the new user text and return only the final reply
+in `AdapterOutcome.finalReply`.
+
+A successful run, its single terminal event and its memory record commit in one
+PGlite transaction. Remote writes run afterwards. `getMemoryWrite(runId)` and
+`listMemoryWrites(projectId)` expose independent state; remote failure never
+changes the run outcome. Missing final replies produce a failed memory record.
+Records contain only new user text and the final reply with project/session/run
+IDs. Pending records survive restart. Dispatch changes pending to unknown before
+network I/O; confirmed responses resolve that state. Neither pending nor unknown
+records are automatically replayed on open. The list returns at most 200 records;
+individual records remain addressable by run ID.
+
+`memoryTimeoutMs` defaults to 5000 and bounds both recall and background waits.
+The provider must also bound its underlying I/O (the official SDK does).
+The SDK example accepts `MEMORY_ENDPOINT`, `MEMORY_API_KEY` and
+`MEMORY_SERVICE_ID`, and prints recall degradation and memory write state.

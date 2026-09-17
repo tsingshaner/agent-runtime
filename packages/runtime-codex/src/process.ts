@@ -221,11 +221,14 @@ export class CodexProcess implements RuntimeAdapter {
    */
   async execute(
     session: NativeSession,
-    input: { sessionId: string; runId: string; text: string },
+    input: { sessionId: string; runId: string; text: string; context?: string },
     emit: (notice: AdapterNotice) => Promise<void>
   ): Promise<AdapterOutcome> {
     this.checkOpen()
-    validate(v.strictObject({ runId: nonempty, sessionId: nonempty, text: nonempty }), input)
+    validate(
+      v.strictObject({ context: v.optional(v.string()), runId: nonempty, sessionId: nonempty, text: nonempty }),
+      input
+    )
     validate(nonempty, session.nativeSessionId)
     if (this.runs.has(input.runId) || this.threads.has(session.nativeSessionId)) {
       throw new RuntimeError('RUN_CONFLICT', 'Session already has an active run')
@@ -250,7 +253,11 @@ export class CodexProcess implements RuntimeAdapter {
       }
       this.runs.set(input.runId, run)
       this.threads.set(session.nativeSessionId, run)
-      void this.begin(run, session, input.text)
+      void this.begin(
+        run,
+        session,
+        input.context ? `<project_memory>\n${input.context}\n</project_memory>\n\n${input.text}` : input.text
+      )
     })
   }
 
@@ -909,7 +916,7 @@ export class CodexProcess implements RuntimeAdapter {
     }
     run.outcome ??=
       turn.status === 'completed'
-        ? { status: 'succeeded' }
+        ? { status: 'succeeded', ...(run.mapper.finalReply !== undefined ? { finalReply: run.mapper.finalReply } : {}) }
         : turn.status === 'interrupted'
           ? { status: 'cancelled' }
           : failed(new RuntimeError('RUN_FAILED', 'Codex turn failed'))

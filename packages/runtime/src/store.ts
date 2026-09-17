@@ -15,7 +15,7 @@ import { parseEvent, startedEvent, type TerminalOutcome, terminalEvent } from '.
 import { RuntimeError } from './errors'
 import { acquireDirectoryLock, type DirectoryLock } from './lock'
 import * as schema from './schema'
-import { approvalBatches, approvals, events, inputRequests, projects, runs, sessions } from './schema'
+import { approvalBatches, approvals, events, inputRequests, memoryWrites, projects, runs, sessions } from './schema'
 import { subscribeToRun } from './subscription'
 import {
   ArchivedSchema,
@@ -39,10 +39,12 @@ import type {
   EventEnvelope,
   InputAnswers,
   InputRequest,
+  MemoryWrite,
   Page,
   Project,
   Run,
   RunInput,
+  RuntimeFault,
   Session,
   SessionFilter,
   UpdateProjectInput
@@ -296,6 +298,40 @@ export class SessionStore {
   /**
    * Finish previously active runs as interrupted and expire their outstanding approvals.
    */
+  getMemoryWrite = async (runId: string): Promise<MemoryWrite | null> => {
+    await this.getRun(runId)
+    const [row] = await this.db.select().from(memoryWrites).where(eq(memoryWrites.runId, runId))
+    return row ?? null
+  }
+
+  listMemoryWrites = async (projectId: string): Promise<MemoryWrite[]> => {
+    parseInput(SessionIdSchema, projectId)
+    return await this.db
+      .select()
+      .from(memoryWrites)
+      .where(eq(memoryWrites.projectId, projectId))
+      .orderBy(memoryWrites.runId)
+      .limit(200)
+  }
+
+  setMemoryError = async (runId: string, memoryError: RuntimeFault): Promise<void> => {
+    await this.db.update(runs).set({ memoryError }).where(eq(runs.id, runId))
+  }
+
+  finishMemoryWrite = async (runId: string, result: Pick<MemoryWrite, 'status' | 'error'>): Promise<void> => {
+    await this.db
+      .update(memoryWrites)
+      .set(result)
+      .where(and(eq(memoryWrites.runId, runId), eq(memoryWrites.status, 'pending')))
+  }
+
+  completeMemoryWrite = async (runId: string, result: Pick<MemoryWrite, 'status' | 'error'>): Promise<void> => {
+    await this.db
+      .update(memoryWrites)
+      .set(result)
+      .where(and(eq(memoryWrites.runId, runId), eq(memoryWrites.status, 'unknown')))
+  }
+
   async recoverInterrupted(): Promise<void> {
     const unfinished = await this.db.select({ id: runs.id }).from(runs).where(inArray(runs.status, activeStatuses))
     for (const { id } of unfinished) {
@@ -591,7 +627,7 @@ export class SessionStore {
   /**
    * Atomically finalize an active run, expire approvals, and persist one terminal event.
    */
-  async finishRun(runId: string, outcome: TerminalOutcome): Promise<void> {
+  async finishRun(runId: string, outcome: TerminalOutcome, memory?: MemoryWrite): Promise<void> {
     const changed = await this.db.transaction(async (tx) => {
       const run = await requireRun(tx, runId)
       const event = terminalEvent(run.sessionId, runId, outcome)
@@ -638,6 +674,9 @@ export class SessionStore {
             value: { inputId: input.id, status: 'expired' }
           })
         )
+      }
+      if (memory && outcome.status === 'succeeded') {
+        await tx.insert(memoryWrites).values(memory)
       }
       await persistEvent(tx, runId, event)
       return true

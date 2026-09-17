@@ -16,6 +16,7 @@ const event = (value: unknown): AdapterNotice => {
  * Project native item notifications into ordered AG-UI notices for one run.
  */
 export class CodexEventMapper {
+  finalReply?: string
   private readonly texts = new Map<string, { text: string; ended: boolean }>()
   private readonly tools = new Set<string>()
   private readonly completed = new Set<string>()
@@ -110,6 +111,9 @@ export class CodexEventMapper {
     const delta = item.text.slice(state.text.length)
     if (delta) {
       output.push(event({ delta, messageId: this.id(item.id), type: 'TEXT_MESSAGE_CONTENT' }))
+    }
+    if (item.phase === 'final_answer') {
+      this.finalReply = item.text
     }
     state.text = item.text
     state.ended = true

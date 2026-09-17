@@ -21,6 +21,8 @@ export type {
   Json,
   JsonObject,
   ManagerOptions,
+  MemoryProvider,
+  MemoryWrite,
   NativeSession,
   Page,
   Project,

@@ -90,7 +90,26 @@ export interface RunInput {
   requestId?: string
 }
 
+export interface MemoryWrite {
+  runId: string
+  projectId: string
+  sessionId: string
+  user: string
+  assistant: string
+  status: 'pending' | 'accepted' | 'failed' | 'unknown'
+  error: RuntimeFault | null
+}
+
+/** Resource seam implemented by ProjectMemory; no runtime dependency in the resource package. */
+export interface MemoryProvider {
+  recall(projectId: string, query: string): Promise<{ context: string }>
+  write(
+    input: Pick<MemoryWrite, 'projectId' | 'sessionId' | 'runId' | 'user' | 'assistant'>
+  ): Promise<{ status: 'accepted' | 'failed' | 'unknown'; error?: RuntimeFault }>
+}
+
 export interface Run {
+  memoryError: RuntimeFault | null
   requestId: string | null
   id: string
   sessionId: string
@@ -201,6 +220,8 @@ export type AdapterNotice =
  * The final result of native execution after its notices have been delivered.
  */
 export interface AdapterOutcome {
+  /** Only the final assistant reply, excluding commentary and tool output. */
+  finalReply?: string
   status: 'succeeded' | 'failed' | 'cancelled'
   error?: RuntimeFault
 }
@@ -248,7 +269,7 @@ export interface RuntimeAdapter {
    */
   execute(
     session: NativeSession,
-    input: { sessionId: string; runId: string; text: string },
+    input: { sessionId: string; runId: string; text: string; context?: string },
     emit: (notice: AdapterNotice) => Promise<void>
   ): Promise<AdapterOutcome>
   /**
@@ -296,6 +317,8 @@ export interface SessionFilter {
  * Persistent data directory and runtime adapters owned by the manager.
  */
 export interface ManagerOptions<A extends RuntimeAdapter = RuntimeAdapter> {
+  memory?: MemoryProvider
+  memoryTimeoutMs?: number
   /**
    * Persistent directory exclusively owned until the manager is disposed.
    */

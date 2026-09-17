@@ -20,6 +20,7 @@ import type {
   InputQuestion,
   InputRequest,
   JsonObject,
+  MemoryWrite,
   RunStatus,
   RuntimeFault
 } from './types'
@@ -59,6 +60,7 @@ export const runs = pgTable(
     eventsCleared: boolean('events_cleared').notNull().default(false),
     id: text().primaryKey(),
     lastSequence: integer('last_sequence').notNull().default(0),
+    memoryError: jsonb('memory_error').$type<RuntimeFault>(),
     nativeTurnId: text('native_turn_id'),
     requestId: text('request_id'),
     requestText: text('request_text'),
@@ -158,3 +160,15 @@ export const inputRequests = pgTable(
     check('input_status_check', sql`${table.status} in ('pending', 'responding', 'resolved', 'expired')`)
   ]
 )
+
+export const memoryWrites = pgTable('memory_writes', {
+  assistant: text().notNull(),
+  error: jsonb().$type<RuntimeFault>(),
+  projectId: text('project_id').notNull(),
+  runId: text('run_id')
+    .primaryKey()
+    .references(() => runs.id),
+  sessionId: text('session_id').notNull(),
+  status: text().$type<MemoryWrite['status']>().notNull(),
+  user: text().notNull()
+})

@@ -143,3 +143,17 @@ describe('CodexEventMapper', () => {
     expect(mapper.accept('future/notification', { ...address })).toEqual([])
   })
 })
+
+test('exposes only completed final answers for memory', () => {
+  const mapper = new CodexEventMapper('s', 'r')
+  mapper.accept('item/completed', {
+    ...address,
+    item: { id: 'comment', phase: 'commentary', text: 'working', type: 'agentMessage' }
+  })
+  expect(mapper.finalReply).toBeUndefined()
+  mapper.accept('item/completed', {
+    ...address,
+    item: { id: 'answer', phase: 'final_answer', text: 'answer', type: 'agentMessage' }
+  })
+  expect(mapper.finalReply).toBe('answer')
+})

@@ -22,7 +22,7 @@ export class ManualAdapter implements RuntimeAdapter {
   readonly created: NativeSession[] = []
   readonly resumed: NativeSession[] = []
   readonly cancelled: string[] = []
-  readonly executions = new Map<string, { sessionId: string; runId: string; text: string }>()
+  readonly executions = new Map<string, { sessionId: string; runId: string; text: string; context?: string }>()
   private readonly active = new Map<
     string,
     { emit: (notice: AdapterNotice) => Promise<void>; outcome: PromiseWithResolvers<AdapterOutcome> }
@@ -78,7 +78,7 @@ export class ManualAdapter implements RuntimeAdapter {
 
   async execute(
     session: NativeSession,
-    input: { sessionId: string; runId: string; text: string },
+    input: { sessionId: string; runId: string; text: string; context?: string },
     emit: (notice: AdapterNotice) => Promise<void>
   ): Promise<AdapterOutcome> {
     if (this.disposed) {

@@ -19,6 +19,8 @@ import type {
   InputAnswers,
   InputRequest,
   ManagerOptions,
+  MemoryProvider,
+  MemoryWrite,
   NativeSession,
   Page,
   Project,
@@ -51,6 +53,15 @@ const CreateSessionSchema = v.strictObject({
 const RunInputSchema = v.strictObject({ requestId: v.optional(NonBlankString), text: NonBlankString })
 const ManagerOptionsSchema = v.strictObject({
   dataDir: NonBlankString,
+  memory: v.optional(
+    v.custom<MemoryProvider>(
+      (value) =>
+        value !== null &&
+        typeof value === 'object' &&
+        ['recall', 'write'].every((key) => typeof Reflect.get(value, key) === 'function')
+    )
+  ),
+  memoryTimeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(120000)), 5000),
   runtimes: v.array(
     v.custom<RuntimeAdapter>((value) => {
       if (value === null || typeof value !== 'object') {
@@ -72,6 +83,7 @@ const ManagerOptionsSchema = v.strictObject({
  * Owns durable sessions, background runs, approvals, and registered runtime adapters.
  */
 export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
+  private readonly memoryTasks = new Set<Promise<void>>()
   private readonly active = new Map<string, { done: Promise<void>; adapter: RuntimeAdapter }>()
   private readonly controls = new Set<Promise<unknown>>()
   private readonly storageOperations = new Set<Promise<unknown>>()
@@ -89,7 +101,9 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
 
   private constructor(
     private readonly store: SessionStore,
-    private readonly adapters: Map<string, RuntimeAdapter>
+    private readonly adapters: Map<string, RuntimeAdapter>,
+    private readonly memory?: MemoryProvider,
+    private readonly memoryTimeoutMs = 5000
   ) {}
 
   /**
@@ -109,7 +123,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     const store = await SessionStore.open(validated.dataDir)
     try {
       await store.recoverInterrupted()
-      return new RuntimeManager<A>(store, adapters)
+      return new RuntimeManager<A>(store, adapters, validated.memory, validated.memoryTimeoutMs)
     } catch (cause) {
       const error = new RuntimeError('STORAGE_ERROR', 'Failed to recover unfinished runs', { cause })
       try {
@@ -533,6 +547,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     )
     this.stop()
     await attempt(() => this.bounded(Promise.all([...this.active.values()].map(({ done }) => done)), 'Run persistence'))
+    await attempt(() => this.bounded(Promise.all(this.memoryTasks), 'Memory persistence'))
     // Seal the boundary before draining: late adapter callbacks can no longer enqueue I/O.
     this.storeClosed = true
     await attempt(async () => {
@@ -659,15 +674,21 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       const native = this.nativeSession(session)
       await Promise.race([adapter.resumeSession(native), this.stopped])
       this.assertRunning()
-      const execution = adapter.execute(native, { ...input, runId, sessionId: session.id }, (notice) => {
-        if (notice.kind === 'approval-batch' && !adapter.respondApprovalBatch) {
-          throw new RuntimeError('UNSUPPORTED_APPROVAL', 'Runtime cannot respond to batches')
+      const context = await this.recallMemory(session.projectId, runId, input.text)
+      this.assertRunning()
+      const execution = adapter.execute(
+        native,
+        { ...input, ...(context ? { context } : {}), runId, sessionId: session.id },
+        (notice) => {
+          if (notice.kind === 'approval-batch' && !adapter.respondApprovalBatch) {
+            throw new RuntimeError('UNSUPPORTED_APPROVAL', 'Runtime cannot respond to batches')
+          }
+          if (notice.kind === 'input' && !adapter.respondInput) {
+            throw new RuntimeError('UNSUPPORTED_INPUT', 'Runtime cannot respond to input')
+          }
+          return this.receive(runId, notice)
         }
-        if (notice.kind === 'input' && !adapter.respondInput) {
-          throw new RuntimeError('UNSUPPORTED_INPUT', 'Runtime cannot respond to input')
-        }
-        return this.receive(runId, notice)
-      })
+      )
       ready()
       outcome = await Promise.race([
         execution,
@@ -686,8 +707,115 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       }
     }
     if (!this.fatal) {
-      await this.storage(() => this.store.finishRun(runId, outcome))
+      await this.finishWithMemory(session, runId, input.text, outcome)
     }
+  }
+
+  private recallMemory = async (projectId: string, runId: string, text: string): Promise<string | undefined> => {
+    const memory = this.memory
+    if (!memory) {
+      return undefined
+    }
+    try {
+      const recalled = await this.memoryRequest(() => memory.recall(projectId, text))
+      return parseInput(v.pipe(v.string(), v.maxLength(32000)), recalled.context)
+    } catch {
+      await this.storage(() =>
+        this.store.setMemoryError(runId, {
+          code: 'MEMORY_RECALL_FAILED',
+          message: 'Memory recall unavailable; continuing without recall'
+        })
+      )
+      return undefined
+    }
+  }
+  private finishWithMemory = async (
+    session: Session,
+    runId: string,
+    text: string,
+    outcome: AdapterOutcome
+  ): Promise<void> => {
+    const memory: MemoryWrite | undefined =
+      this.memory && outcome.status === 'succeeded'
+        ? {
+            assistant: outcome.finalReply ?? '',
+            error:
+              outcome.finalReply === undefined
+                ? { code: 'MEMORY_REPLY_UNAVAILABLE', message: 'Runtime did not supply a final reply' }
+                : null,
+            projectId: session.projectId,
+            runId,
+            sessionId: session.id,
+            status: outcome.finalReply === undefined ? 'failed' : 'pending',
+            user: text
+          }
+        : undefined
+    await this.storage(() => this.store.finishRun(runId, outcome, memory))
+    if (memory?.status === 'pending') {
+      const task = this.writeMemory(memory)
+        .catch((error: unknown) => {
+          this.failStorage(error)
+        })
+        .finally(() => this.memoryTasks.delete(task))
+      this.memoryTasks.add(task)
+    }
+  }
+
+  getMemoryWrite = (runId: string): Promise<MemoryWrite | null> => {
+    this.assertOpen()
+    return this.storage(() => this.store.getMemoryWrite(runId))
+  }
+  listMemoryWrites = (projectId: string): Promise<MemoryWrite[]> => {
+    this.assertOpen()
+    return this.storage(() => this.store.listMemoryWrites(projectId))
+  }
+  private memoryRequest = async <T>(operation: () => Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        Promise.resolve().then(operation),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Memory timeout')), this.memoryTimeoutMs)
+        })
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  private writeMemory = async (record: MemoryWrite): Promise<void> => {
+    const memory = this.memory
+    if (!memory) {
+      return
+    }
+    // Mark uncertainty before network I/O. A crash after this commit must never replay the write.
+    await this.storage(() =>
+      this.store.finishMemoryWrite(record.runId, {
+        error: { code: 'MEMORY_WRITE_UNCERTAIN', message: 'Memory write not confirmed; do not retry automatically' },
+        status: 'unknown'
+      })
+    )
+    if (this.storeClosed || this.stopping) {
+      return
+    }
+    let result: Pick<MemoryWrite, 'status' | 'error'>
+    try {
+      const { projectId, sessionId, runId, user, assistant } = record
+      const receipt = await this.memoryRequest(() => memory.write({ assistant, projectId, runId, sessionId, user }))
+      const status = parseInput(v.picklist(['accepted', 'failed', 'unknown']), receipt.status)
+      result = {
+        error:
+          status === 'accepted'
+            ? null
+            : {
+                code: status === 'failed' ? 'MEMORY_WRITE_FAILED' : 'MEMORY_WRITE_UNCERTAIN',
+                message: 'Memory write not confirmed'
+              },
+        status
+      }
+    } catch {
+      return
+    }
+    await this.storage(() => this.store.completeMemoryWrite(record.runId, result))
   }
 
   private async receive(runId: string, notice: AdapterNotice): Promise<void> {

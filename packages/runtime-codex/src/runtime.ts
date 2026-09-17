@@ -53,7 +53,7 @@ export class CodexRuntime implements RuntimeAdapter {
 
   async execute(
     session: NativeSession,
-    input: { sessionId: string; runId: string; text: string },
+    input: { sessionId: string; runId: string; text: string; context?: string },
     emit: (notice: AdapterNotice) => Promise<void>
   ): Promise<AdapterOutcome> {
     this.checkOpen()

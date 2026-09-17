@@ -286,6 +286,9 @@ importers:
 
   examples/sdk:
     dependencies:
+      '@qingshaner/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@qingshaner/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime

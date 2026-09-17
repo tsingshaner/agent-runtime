@@ -1,0 +1,14 @@
+{
+  "name": "@internal/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "pnpm --workspace-root build && node src/main.ts",
+    "smoke": "pnpm --workspace-root build && node smoke.ts"
+  },
+  "dependencies": {
+    "@qingshaner/runtime": "workspace:*",
+    "@qingshaner/runtime-codex": "workspace:*",
+    "valibot": "1.5.0"
+  }
+}

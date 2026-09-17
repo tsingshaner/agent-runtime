@@ -14,5 +14,5 @@
     "types": ["node"]
   },
   "extends": "@qingshaner/devtools/tsconfig/base.json",
-  "include": ["../packages/**/*.ts", "../examples/**/*.ts"]
+  "include": ["../packages/**/*.ts", "../examples/**/*.ts", "../apps/**/*.ts"]
 }

@@ -8,6 +8,7 @@ const packages = [
   ['memory', '@qingshaner/memory'],
   ['knowledge', '@qingshaner/knowledge'],
   ['skill', '@qingshaner/skill'],
+  ['mcp', '@qingshaner/mcp'],
   ['shared', '@internal/shared'],
   ['runtime-codex', '@qingshaner/runtime-codex']
 ] as const
@@ -29,7 +30,8 @@ export default defineConfig(
         'drizzle-orm',
         'es-toolkit',
         'valibot',
-        'yaml'
+        'yaml',
+        /^@modelcontextprotocol\/sdk/
       ]
     },
     dts: {

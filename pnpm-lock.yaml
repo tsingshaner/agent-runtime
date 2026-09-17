@@ -302,6 +302,18 @@ importers:
         specifier: 1.5.0
         version: 1.5.0(typescript@7.0.2)
 
+  packages/mcp:
+    dependencies:
+      '@internal/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.0
+        version: 1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5)
+      valibot:
+        specifier: 1.5.0
+        version: 1.5.0(typescript@7.0.2)
+
   packages/memory: {}
 
   packages/runtime:

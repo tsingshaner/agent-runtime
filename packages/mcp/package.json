@@ -1,0 +1,25 @@
+{
+  "name": "@qingshaner/mcp",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "ISC",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@internal/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "valibot": "1.5.0"
+  }
+}

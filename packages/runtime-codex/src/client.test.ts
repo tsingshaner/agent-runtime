@@ -24,7 +24,7 @@ interface ControlMessage {
   frame: { id: number | string; method?: string; result?: unknown; error?: unknown; params?: unknown }
 }
 
-async function peer(requestTimeoutMs = 1000) {
+const peer = async (requestTimeoutMs = 1000) => {
   const server = createServer()
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')

@@ -1,10 +1,25 @@
 import type { EventSchemas } from '@ag-ui/core'
 
+/**
+ * An event validated against the AG-UI event schemas.
+ */
 export type AgUiEvent = ReturnType<typeof EventSchemas.parse>
 
+/**
+ * A JSON value. Runtime validation rejects cycles and non-finite numbers.
+ */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
+/**
+ * A JSON object used for persisted runtime options and approval details.
+ */
 export type JsonObject = { [key: string]: Json }
+/**
+ * A decision to approve or deny a native operation.
+ */
 export type ApprovalDecision = 'approve' | 'deny'
+/**
+ * Persisted run lifecycle; interrupted marks unfinished work recovered after restart.
+ */
 export type RunStatus =
   | 'starting'
   | 'running'
@@ -14,9 +29,18 @@ export type RunStatus =
   | 'failed'
   | 'cancelled'
   | 'interrupted'
+/**
+ * Approval lifecycle; responding means a decision was claimed but is not yet confirmed.
+ */
 export type ApprovalStatus = 'pending' | 'responding' | 'resolved' | 'expired'
+/**
+ * Serializable error code and message stored with a run.
+ */
 export type RuntimeFault = { code: string; message: string }
 
+/**
+ * A session created through this SDK, with SDK and native identities stored separately.
+ */
 export interface Session {
   id: string
   runtime: string
@@ -28,9 +52,15 @@ export interface Session {
   createdAt: string
   updatedAt: string
   archived: boolean
+  /**
+   * The current active run, or null when the session is idle.
+   */
   activeRunId: string | null
 }
 
+/**
+ * A persisted execution attempt belonging to one managed session.
+ */
 export interface Run {
   id: string
   sessionId: string
@@ -39,17 +69,32 @@ export interface Run {
   error: RuntimeFault | null
   createdAt: string
   endedAt: string | null
+  /**
+   * Highest committed event sequence; retained even after events are cleared.
+   */
   lastSequence: number
+  /**
+   * Whether event history was explicitly removed and replay is unavailable.
+   */
   eventsCleared: boolean
 }
 
+/**
+ * A durable AG-UI event with a run-local sequence used for replay.
+ */
 export interface EventEnvelope {
   sessionId: string
   runId: string
+  /**
+   * Monotonically increasing sequence within this run, starting at 1.
+   */
   sequence: number
   event: AgUiEvent
 }
 
+/**
+ * A persisted native approval request and its response state.
+ */
 export interface Approval {
   id: string
   runId: string
@@ -61,6 +106,9 @@ export interface Approval {
   decision: ApprovalDecision | null
 }
 
+/**
+ * Adapter notifications consumed in order by the manager for durable persistence.
+ */
 export type AdapterNotice =
   | { kind: 'started'; nativeTurnId: string }
   | { kind: 'event'; event: AgUiEvent }
@@ -78,36 +126,77 @@ export type AdapterNotice =
       responseAttempted?: boolean
     }
 
+/**
+ * The final result of native execution after its notices have been delivered.
+ */
 export interface AdapterOutcome {
   status: 'succeeded' | 'failed' | 'cancelled'
   error?: RuntimeFault
 }
 
+/**
+ * Native identity and effective options required to resume a managed session.
+ */
 export interface NativeSession {
   nativeSessionId: string
   cwd: string
   options: JsonObject
 }
 
+/**
+ * The common runtime contract implemented by native adapters.
+ *
+ * @remarks
+ * Adapters own native processes; the manager owns persistence and run lifecycle events.
+ */
 export interface RuntimeAdapter {
+  /**
+   * Unique runtime key used to select this adapter.
+   */
   readonly kind: string
+  /**
+   * Create a native session and return its effective working directory and options.
+   */
   createSession(input: { cwd: string; options?: JsonObject }): Promise<NativeSession>
+  /**
+   * Load a previously managed native session; repeated calls must be safe.
+   */
   resumeSession(session: NativeSession): Promise<void>
+  /**
+   * Execute one run and await each emit callback before delivering the next notice.
+   *
+   * @returns The terminal outcome after all notices have been delivered.
+   */
   execute(
     session: NativeSession,
     input: { sessionId: string; runId: string; text: string },
     emit: (notice: AdapterNotice) => Promise<void>
   ): Promise<AdapterOutcome>
+  /**
+   * Request cancellation of the identified run without stopping other sessions.
+   */
   cancel(runId: string): Promise<void>
+  /**
+   * Send a decision for the native request associated with this run.
+   */
   respondApproval(runId: string, nativeRequestId: string | number, decision: ApprovalDecision): Promise<void>
+  /**
+   * Release all resources owned by this adapter; repeated calls must be safe.
+   */
   dispose(): Promise<void>
 }
 
+/**
+ * A page of results with an opaque cursor, or null when there are no more results.
+ */
 export interface Page<T> {
   items: T[]
   nextCursor: string | null
 }
 
+/**
+ * Session filters and pagination; archived defaults to false and limit defaults to 50.
+ */
 export interface SessionFilter {
   projectId?: string
   runtime?: string
@@ -116,11 +205,23 @@ export interface SessionFilter {
   cursor?: string
 }
 
+/**
+ * Persistent data directory and runtime adapters owned by the manager.
+ */
 export interface ManagerOptions {
+  /**
+   * Persistent directory exclusively owned until the manager is disposed.
+   */
   dataDir: string
+  /**
+   * Adapters with unique kind values; disposed together with the manager.
+   */
   runtimes: RuntimeAdapter[]
 }
 
+/**
+ * Input for creating an SDK-managed session through a registered runtime.
+ */
 export interface CreateSessionInput {
   runtime: string
   projectId: string

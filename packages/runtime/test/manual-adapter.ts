@@ -11,16 +11,6 @@ import type {
   RuntimeAdapter
 } from '../src/types'
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (reason: unknown) => void
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, reject, resolve }
-}
-
 export class ManualAdapter implements RuntimeAdapter {
   readonly kind = 'manual'
   readonly created: NativeSession[] = []
@@ -29,9 +19,9 @@ export class ManualAdapter implements RuntimeAdapter {
   readonly executions = new Map<string, { sessionId: string; runId: string; text: string }>()
   private readonly active = new Map<
     string,
-    { emit: (notice: AdapterNotice) => Promise<void>; outcome: ReturnType<typeof deferred<AdapterOutcome>> }
+    { emit: (notice: AdapterNotice) => Promise<void>; outcome: PromiseWithResolvers<AdapterOutcome> }
   >()
-  private readonly starts = new Map<string, ReturnType<typeof deferred<void>>>()
+  private readonly starts = new Map<string, PromiseWithResolvers<void>>()
   readonly decisions: { runId: string; nativeRequestId: string | number; decision: ApprovalDecision }[] = []
   cancelError?: Error
   finishOnCancel = true
@@ -66,7 +56,7 @@ export class ManualAdapter implements RuntimeAdapter {
     if (!this.resumed.some(({ nativeSessionId }) => nativeSessionId === session.nativeSessionId)) {
       throw new Error('Session must be resumed before execution')
     }
-    const outcome = deferred<AdapterOutcome>()
+    const outcome = Promise.withResolvers<AdapterOutcome>()
     this.active.set(input.runId, { emit, outcome })
     this.executions.set(input.runId, input)
     this.starts.get(input.runId)?.resolve()
@@ -83,7 +73,7 @@ export class ManualAdapter implements RuntimeAdapter {
     }
     let start = this.starts.get(runId)
     if (!start) {
-      start = deferred<void>()
+      start = Promise.withResolvers<void>()
       this.starts.set(runId, start)
     }
     return start.promise

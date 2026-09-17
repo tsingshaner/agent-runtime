@@ -8,7 +8,10 @@ const NonEmptyStringSchema = v.pipe(v.string(), v.minLength(1))
 export const SessionIdSchema = NonEmptyStringSchema
 export const ArchivedSchema = v.boolean()
 
-function isJson(value: unknown, visiting = new WeakSet<object>()): value is Json {
+/**
+ * Check JSON compatibility while rejecting cycles and allowing repeated non-cyclic references.
+ */
+const isJson = (value: unknown, visiting = new WeakSet<object>()): value is Json => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') {
     return true
   }
@@ -71,7 +74,15 @@ export const CursorSchema = v.strictObject({
 export type InsertSessionInput = v.InferOutput<typeof InsertSessionInputSchema>
 export type Cursor = v.InferOutput<typeof CursorSchema>
 
-export function parseInput<TSchema extends v.GenericSchema>(schema: TSchema, input: unknown): v.InferOutput<TSchema> {
+/**
+ * Validate input with Valibot and expose a stable SDK validation error.
+ *
+ * @throws {@link RuntimeError} with INVALID_INPUT when validation fails.
+ */
+export const parseInput = <TSchema extends v.GenericSchema>(
+  schema: TSchema,
+  input: unknown
+): v.InferOutput<TSchema> => {
   const result = v.safeParse(schema, input)
   if (!result.success) {
     throw new RuntimeError('INVALID_INPUT', 'Invalid input')

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 
 import type { AdapterNotice, JsonObject, NativeSession } from '@qingshaner/runtime'
 
-import { closePeers, cwd, deferred, delta, done, fakePath, input, peer, turn } from '../test/runtime-peer'
+import { closePeers, cwd, delta, done, fakePath, input, peer, turn } from '../test/runtime-peer'
 import { CodexRuntime } from './runtime'
 
 afterEach(closePeers)
@@ -65,8 +65,8 @@ describe('CodexRuntime', () => {
     const p = await peer()
     const session = await p.create()
     const notices: AdapterNotice[] = []
-    const gate = deferred()
-    const entered = deferred()
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
     let settled = false
     const execution = p.runtime
       .execute(session, input, async (notice) => {
@@ -209,8 +209,8 @@ describe('CodexRuntime', () => {
     async (limit) => {
       const p = await peer()
       const session = await p.create()
-      const gate = deferred()
-      const entered = deferred()
+      const gate = Promise.withResolvers<void>()
+      const entered = Promise.withResolvers<void>()
       let settled = false
       const execution = p.runtime
         .execute(session, input, async (notice) => {
@@ -255,8 +255,8 @@ describe('CodexRuntime', () => {
     const p = await peer(60)
     const first = await p.create()
     const second = await p.create('other')
-    const gate = deferred()
-    const entered = deferred()
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
     const a = p.runtime.execute(first, input, async (notice) => {
       if (notice.kind === 'started') {
         entered.resolve()
@@ -279,8 +279,8 @@ describe('CodexRuntime', () => {
   test('preserves a received terminal result when the process exits during an awaited emit', async () => {
     const p = await peer()
     const session = await p.create()
-    const gate = deferred()
-    const entered = deferred()
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
     const execution = p.runtime.execute(session, input, async (notice) => {
       if (notice.kind === 'started') {
         entered.resolve()
@@ -303,8 +303,8 @@ describe('CodexRuntime', () => {
   ])('preserves a terminal %s start response and queued output after transport exit', async (status, outcome) => {
     const p = await peer()
     const session = await p.create()
-    const gate = deferred()
-    const entered = deferred()
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
     const notices: AdapterNotice[] = []
     const execution = p.runtime.execute(session, input, async (notice) => {
       notices.push(notice)

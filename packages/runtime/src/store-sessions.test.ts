@@ -145,7 +145,7 @@ describe('SessionStore sessions', () => {
   })
 })
 
-function session(id: string, projectId = 'p1', runtime = 'codex') {
+const session = (id: string, projectId = 'p1', runtime = 'codex') => {
   return {
     cwd: '/workspace',
     id,

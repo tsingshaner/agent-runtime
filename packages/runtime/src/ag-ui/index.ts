@@ -2,17 +2,32 @@ import { EventSchemas, EventType } from '@ag-ui/core'
 
 import type { AdapterOutcome, AgUiEvent, RuntimeFault } from '../types'
 
+/**
+ * A native terminal outcome or an interruption discovered during recovery.
+ */
 export type TerminalOutcome = AdapterOutcome | { status: 'interrupted'; error: RuntimeFault }
 
-export function parseEvent(value: unknown): AgUiEvent {
+/**
+ * Validate a value against the AG-UI event schemas.
+ *
+ * @returns The validated event.
+ * @throws A schema validation error for malformed events.
+ */
+export const parseEvent = (value: unknown): AgUiEvent => {
   return EventSchemas.parse(value)
 }
 
-export function startedEvent(sessionId: string, runId: string): AgUiEvent {
+/**
+ * Create the manager-owned RUN_STARTED event using SDK session and run IDs.
+ */
+export const startedEvent = (sessionId: string, runId: string): AgUiEvent => {
   return parseEvent({ runId, threadId: sessionId, type: EventType.RUN_STARTED })
 }
 
-export function terminalEvent(sessionId: string, runId: string, outcome: TerminalOutcome): AgUiEvent {
+/**
+ * Map success to RUN_FINISHED and other terminal outcomes to RUN_ERROR.
+ */
+export const terminalEvent = (sessionId: string, runId: string, outcome: TerminalOutcome): AgUiEvent => {
   if (outcome.status === 'succeeded') {
     return parseEvent({ runId, threadId: sessionId, type: EventType.RUN_FINISHED })
   }

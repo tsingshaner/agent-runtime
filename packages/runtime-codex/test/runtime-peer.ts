@@ -11,7 +11,7 @@ import type { Json } from '@qingshaner/runtime'
 export const fakePath = fileURLToPath(new URL('./fake-app-server.mjs', import.meta.url))
 export const cwd = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '')
 const cleanup: (() => Promise<void>)[] = []
-export async function closePeers() {
+export const closePeers = async () => {
   for (const close of cleanup.splice(0).reverse()) {
     await close()
   }
@@ -19,15 +19,7 @@ export async function closePeers() {
 type WireFrame = { id: number | string; method: string; params: Record<string, Json>; result?: Json }
 type Control = { event: string; frame: WireFrame }
 
-export function deferred() {
-  let resolve!: () => void
-  const promise = new Promise<void>((done) => {
-    resolve = done
-  })
-  return { promise, resolve }
-}
-
-export async function peer(requestTimeoutMs = 1000, stateDir?: string) {
+export const peer = async (requestTimeoutMs = 1000, stateDir?: string) => {
   const server = createServer()
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')

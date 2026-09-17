@@ -243,7 +243,10 @@ const parameterSchemas: Record<string, v.GenericSchema> = {
   'turn/started': TurnNotificationSchema
 }
 
-export function parseProtocol<T extends v.GenericSchema>(schema: T, value: unknown): v.InferOutput<T> {
+/**
+ * Validate a native payload and normalize schema failures to PROTOCOL_ERROR.
+ */
+export const parseProtocol = <T extends v.GenericSchema>(schema: T, value: unknown): v.InferOutput<T> => {
   const result = v.safeParse(schema, value)
   if (!result.success) {
     throw new RuntimeError('PROTOCOL_ERROR', 'Invalid app-server protocol frame')
@@ -251,7 +254,10 @@ export function parseProtocol<T extends v.GenericSchema>(schema: T, value: unkno
   return result.output
 }
 
-export function parseFrame(value: unknown): Frame {
+/**
+ * Validate a JSON-RPC envelope and classify responses, notifications, and server requests.
+ */
+export const parseFrame = (value: unknown): Frame => {
   const frame = parseProtocol(EnvelopeSchema, value)
   if ('method' in frame) {
     const schema = Object.hasOwn(parameterSchemas, frame.method) ? parameterSchemas[frame.method] : undefined
@@ -267,7 +273,10 @@ export function parseFrame(value: unknown): Frame {
     : { id: frame.id, kind: 'response', result: frame.result }
 }
 
-export function parseResult(method: string, value: Json): Json {
+/**
+ * Validate supported method results against their native response schemas.
+ */
+export const parseResult = (method: string, value: Json): Json => {
   switch (method) {
     case 'initialize':
       return parseProtocol(InitializeResponseSchema, value)

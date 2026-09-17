@@ -5,12 +5,26 @@ import { join } from 'node:path'
 
 import { RuntimeError } from './errors'
 
+/**
+ * Exclusive ownership of a persistent data directory.
+ */
 export interface DirectoryLock {
   path: string
+  /**
+   * Remove the lock only if its ownership token still matches; safe to repeat.
+   */
   release(): Promise<void>
 }
 
-export async function acquireDirectoryLock(dataDir: string): Promise<DirectoryLock> {
+/**
+ * Acquire a lock in the canonical data directory, creating the directory if needed.
+ *
+ * @remarks
+ * Existing locks are never automatically reclaimed.
+ *
+ * @throws {@link RuntimeError} with DATA_DIR_BUSY if a lock already exists.
+ */
+export const acquireDirectoryLock = async (dataDir: string): Promise<DirectoryLock> => {
   await mkdir(dataDir, { mode: 0o700, recursive: true })
   const canonicalDir = await realpath(dataDir)
   const path = join(canonicalDir, '.manager.lock')

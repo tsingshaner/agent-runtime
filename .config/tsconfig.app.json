@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "lib": ["ES2023", "DOM", "ESNext.Array"],
+    "lib": ["ESNext"],
     "paths": {
       "@internal/shared": ["../packages/shared/src/index.ts"],
       "@qingshaner/runtime": ["../packages/runtime/src/index.ts"],

@@ -49,6 +49,9 @@ const SessionOptionsSchema = v.strictObject({
   model: v.optional(nonempty),
   sandbox: v.optional(v.picklist(['read-only', 'workspace-write']), 'workspace-write')
 })
+/**
+ * Codex process settings, required default model, and optional request and shutdown timeouts in milliseconds.
+ */
 export type CodexRuntimeOptions = v.InferInput<typeof OptionsSchema>
 type Notification = Extract<Frame, { kind: 'notification' }>
 type QueueEntry = { frame?: Notification; notice?: AdapterNotice; bytes: number; responseAttempted?: boolean }
@@ -56,7 +59,7 @@ interface PendingApproval {
   allowedDecisions: ApprovalDecision[]
   responding: boolean
   resolved: boolean
-  confirmation?: ReturnType<typeof deferred>
+  confirmation?: PromiseWithResolvers<void>
 }
 interface ActiveRun {
   runId: string
@@ -72,7 +75,7 @@ interface ActiveRun {
   responseDone: boolean
   cancelRequested: boolean
   interrupt?: Promise<void>
-  cancellation?: ReturnType<typeof deferred>
+  cancellation?: PromiseWithResolvers<void>
   approvals: Map<string | number, PendingApproval>
   fault?: RuntimeError
   outcome?: AdapterOutcome
@@ -83,30 +86,32 @@ interface ActiveRun {
   resolve: (outcome: AdapterOutcome) => void
 }
 
-function deferred() {
-  let resolve!: () => void
-  let reject!: (reason: unknown) => void
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, reject, resolve }
-}
-
-function validate<T extends v.GenericSchema>(schema: T, value: unknown): v.InferOutput<T> {
+/**
+ * Validate native runtime input and report INVALID_INPUT on failure.
+ */
+const validate = <T extends v.GenericSchema>(schema: T, value: unknown): v.InferOutput<T> => {
   const result = v.safeParse(schema, value)
   if (!result.success) {
     throw new RuntimeError('INVALID_INPUT', 'Invalid Codex runtime input')
   }
   return result.output
 }
-function failure(error: unknown): RuntimeError {
+/**
+ * Preserve SDK faults and normalize other failures to ADAPTER_ERROR.
+ */
+const failure = (error: unknown): RuntimeError => {
   return error instanceof RuntimeError ? error : new RuntimeError('ADAPTER_ERROR', 'Codex runtime operation failed')
 }
-function failed(error: RuntimeError): AdapterOutcome {
+/**
+ * Convert a runtime error to a serializable terminal adapter outcome.
+ */
+const failed = (error: RuntimeError): AdapterOutcome => {
   return { error: { code: error.code, message: error.message }, status: 'failed' }
 }
 
+/**
+ * Codex adapter with one lazily started app-server process shared by its sessions.
+ */
 export class CodexRuntime implements RuntimeAdapter {
   readonly kind = 'codex'
   private readonly options: v.InferOutput<typeof OptionsSchema>
@@ -118,10 +123,16 @@ export class CodexRuntime implements RuntimeAdapter {
   private readonly runs = new Map<string, ActiveRun>()
   private readonly threads = new Map<string, ActiveRun>()
 
+  /**
+   * Validate process settings without starting the native process.
+   */
   constructor(options: CodexRuntimeOptions) {
     this.options = validate(OptionsSchema, options)
   }
 
+  /**
+   * Start a native thread with validated session options and a canonical working directory.
+   */
   async createSession(input: { cwd: string; options?: JsonObject }): Promise<NativeSession> {
     this.checkOpen()
     const options = this.sessionOptions(input.options ?? {})
@@ -134,6 +145,9 @@ export class CodexRuntime implements RuntimeAdapter {
     return { cwd, nativeSessionId: result.thread.id, options }
   }
 
+  /**
+   * Load a native thread once per process generation, sharing concurrent resume requests.
+   */
   async resumeSession(session: NativeSession): Promise<void> {
     this.checkOpen()
     const nativeSessionId = validate(nonempty, session.nativeSessionId)
@@ -168,6 +182,14 @@ export class CodexRuntime implements RuntimeAdapter {
     }
   }
 
+  /**
+   * Execute one native turn and deliver ordered notices with persistence backpressure.
+   *
+   * @param session - Native session identity and effective options.
+   * @param input - SDK identities and user text.
+   * @param emit - Async consumer awaited before advancing the notice queue.
+   * @returns The terminal outcome after queued notices have been delivered.
+   */
   async execute(
     session: NativeSession,
     input: { sessionId: string; runId: string; text: string },
@@ -202,6 +224,9 @@ export class CodexRuntime implements RuntimeAdapter {
     })
   }
 
+  /**
+   * Interrupt the selected native turn; repeated calls share its cancellation acknowledgement.
+   */
   async cancel(runId: string): Promise<void> {
     this.checkOpen()
     const run = this.runs.get(runId)
@@ -209,11 +234,16 @@ export class CodexRuntime implements RuntimeAdapter {
       return
     }
     run.cancelRequested = true
-    run.cancellation ??= deferred()
+    run.cancellation ??= Promise.withResolvers<void>()
     this.sendCancellation(run)
     await run.cancellation.promise
   }
 
+  /**
+   * Send one native approval response and wait for request resolution.
+   *
+   * @throws {@link RuntimeError} if the request is unavailable, already claimed, or not confirmed.
+   */
   async respondApproval(runId: string, nativeRequestId: string | number, decision: ApprovalDecision): Promise<void> {
     this.checkOpen()
     const run = this.runs.get(runId)
@@ -228,7 +258,7 @@ export class CodexRuntime implements RuntimeAdapter {
       throw new RuntimeError('INVALID_INPUT', 'Decision is not allowed')
     }
     approval.responding = true
-    const confirmation = deferred()
+    const confirmation = Promise.withResolvers<void>()
     approval.confirmation = confirmation
     const uncertain = () => new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Approval response was not confirmed')
     const timer = setTimeout(() => confirmation.reject(uncertain()), this.options.requestTimeoutMs ?? 15_000)
@@ -243,6 +273,9 @@ export class CodexRuntime implements RuntimeAdapter {
     await result
   }
 
+  /**
+   * Close the shared app-server and fail unfinished runs; repeated calls share completion.
+   */
   dispose(): Promise<void> {
     if (!this.closing) {
       this.disposed = true

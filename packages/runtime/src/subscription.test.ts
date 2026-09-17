@@ -300,7 +300,7 @@ describe('run subscriptions', () => {
   })
 })
 
-async function collect(source: AsyncIterable<EventEnvelope>): Promise<EventEnvelope[]> {
+const collect = async (source: AsyncIterable<EventEnvelope>): Promise<EventEnvelope[]> => {
   const result: EventEnvelope[] = []
   for await (const event of source) {
     result.push(event)
@@ -308,7 +308,7 @@ async function collect(source: AsyncIterable<EventEnvelope>): Promise<EventEnvel
   return result
 }
 
-function barrier() {
+const barrier = () => {
   let resolve!: () => void
   const promise = new Promise<void>((done) => {
     resolve = done

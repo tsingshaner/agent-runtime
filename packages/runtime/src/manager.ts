@@ -56,6 +56,9 @@ const ManagerOptionsSchema = v.strictObject({
   )
 })
 
+/**
+ * Owns durable sessions, background runs, approvals, and registered runtime adapters.
+ */
 export class RuntimeManager {
   private readonly active = new Map<string, { done: Promise<void>; adapter: RuntimeAdapter }>()
   private readonly controls = new Set<Promise<unknown>>()
@@ -77,6 +80,14 @@ export class RuntimeManager {
     private readonly adapters: Map<string, RuntimeAdapter>
   ) {}
 
+  /**
+   * Open the persistent store and mark unfinished runs from a previous host as interrupted.
+   *
+   * @remarks
+   * Acquires exclusive directory ownership. Opening does not start native runtime processes.
+   *
+   * @throws {@link RuntimeError} when options are invalid or the data directory is already owned.
+   */
   static async open(options: ManagerOptions): Promise<RuntimeManager> {
     const validated = parseInput(ManagerOptionsSchema, options)
     const adapters = new Map(validated.runtimes.map((adapter) => [adapter.kind, adapter]))
@@ -98,6 +109,12 @@ export class RuntimeManager {
     }
   }
 
+  /**
+   * Create and persist a session through the selected runtime.
+   *
+   * @param input - Runtime key, project identity, existing working directory, and optional native settings.
+   * @returns The SDK-managed session with its native identity and effective options.
+   */
   async createSession(input: CreateSessionInput): Promise<Session> {
     return await this.control(async () => {
       const validated = parseInput(CreateSessionSchema, input)
@@ -129,16 +146,27 @@ export class RuntimeManager {
     })
   }
 
+  /**
+   * Read an SDK-managed session by its SDK ID.
+   *
+   * @throws {@link RuntimeError} if the session is not in this store.
+   */
   async getSession(sessionId: string): Promise<Session> {
     this.assertOpen()
     return await this.storage(() => this.store.getSession(sessionId))
   }
 
+  /**
+   * List managed sessions from newest to oldest; excludes archived sessions by default.
+   */
   async listSessions(filter?: SessionFilter): Promise<Page<Session>> {
     this.assertOpen()
     return await this.storage(() => this.store.listSessions(filter))
   }
 
+  /**
+   * Load a persisted session in its native runtime without starting a run.
+   */
   async resumeSession(sessionId: string): Promise<Session> {
     return await this.control(async () => {
       const session = await this.storage(() => this.store.getSession(sessionId))
@@ -148,16 +176,34 @@ export class RuntimeManager {
     })
   }
 
+  /**
+   * Archive an idle session without deleting its runs or native state.
+   *
+   * @throws {@link RuntimeError} if the session has an active run.
+   */
   async archiveSession(sessionId: string): Promise<void> {
     this.assertOpen()
     await this.storage(() => this.store.setArchived(sessionId, true))
   }
 
+  /**
+   * Restore an archived session to the default session listing.
+   */
   async unarchiveSession(sessionId: string): Promise<void> {
     this.assertOpen()
     await this.storage(() => this.store.setArchived(sessionId, false))
   }
 
+  /**
+   * Persist a new run and start execution in the background.
+   *
+   * @remarks
+   * Returns before execution completes. Use subscribe to receive durable events.
+   * Execution continues independently of subscribers while the manager remains alive.
+   *
+   * @returns SDK session and run IDs for later queries, subscriptions, and cancellation.
+   * @throws {@link RuntimeError} if the session is archived or already has an active run.
+   */
   async run(sessionId: string, input: { text: string }): Promise<{ runId: string; sessionId: string }> {
     return await this.control(async () => {
       const validated = parseInput(RunInputSchema, input)
@@ -189,31 +235,61 @@ export class RuntimeManager {
     })
   }
 
+  /**
+   * Read a persisted run by its SDK ID.
+   */
   async getRun(runId: string): Promise<Run> {
     this.assertOpen()
     return await this.storage(() => this.store.getRun(runId))
   }
 
+  /**
+   * List a session's runs from newest to oldest using an opaque pagination cursor.
+   */
   async listRuns(sessionId: string, page?: { limit?: number; cursor?: string }): Promise<Page<Run>> {
     this.assertOpen()
     return await this.storage(() => this.store.listRuns(sessionId, page))
   }
 
+  /**
+   * Replay persisted events, then follow new events until the run ends.
+   *
+   * @param runId - SDK run ID.
+   * @param options - Exclusive sequence cursor and optional signal that stops only this subscription.
+   * @returns An independent async iterable; save each sequence to resume after reconnecting.
+   * @throws {@link RuntimeError} during iteration if the cursor is invalid or events were cleared.
+   */
   subscribe(runId: string, options?: { afterSequence?: number; signal?: AbortSignal }): AsyncIterable<EventEnvelope> {
     this.assertOpen()
     return this.store.subscribe(runId, options)
   }
 
+  /**
+   * Delete event history for a terminal run while retaining run metadata.
+   *
+   * @throws {@link RuntimeError} if the run is still active.
+   */
   async clearRunEvents(runId: string): Promise<void> {
     this.assertOpen()
     await this.storage(() => this.store.clearRunEvents(runId))
   }
 
+  /**
+   * List pending and responding approvals, including responses awaiting native confirmation.
+   */
   async listPendingApprovals(runId: string): Promise<Approval[]> {
     this.assertOpen()
     return await this.storage(() => this.store.listPendingApprovals(runId))
   }
 
+  /**
+   * Durably claim an approval before sending its decision to the native runtime.
+   *
+   * @remarks
+   * A claimed response is never automatically resent. A transport failure may leave its outcome uncertain.
+   *
+   * @throws {@link RuntimeError} if the approval cannot be claimed or its response is unconfirmed.
+   */
   async respondApproval(runId: string, approvalId: string, decision: ApprovalDecision): Promise<void> {
     return await this.control(async () => {
       const run = await this.storage(() => this.store.getRun(runId))
@@ -229,6 +305,12 @@ export class RuntimeManager {
     })
   }
 
+  /**
+   * Request cancellation of one run; concurrent requests share the same operation.
+   *
+   * @remarks
+   * Completion acknowledges the request; observe the run for its final status.
+   */
   async cancel(runId: string): Promise<void> {
     return await this.control(async () => {
       let cancellation = this.cancellations.get(runId)
@@ -266,6 +348,14 @@ export class RuntimeManager {
     }
   }
 
+  /**
+   * Stop accepting work, cancel active runs, and close adapters and the persistent store.
+   *
+   * @remarks
+   * Repeated calls share the same promise. Directory ownership is retained if database shutdown fails.
+   *
+   * @throws An AggregateError if resource cleanup fails.
+   */
   dispose(): Promise<void> {
     this.closing = true
     this.closePromise ??= this.closeResources()

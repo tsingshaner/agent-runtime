@@ -5,10 +5,16 @@ import type { InferOutput } from 'valibot'
 import { DeltaSchema, ItemNotificationSchema, type ItemSchema, parseProtocol } from './protocol'
 
 type Item = InferOutput<typeof ItemSchema>
-function event(value: unknown): AdapterNotice {
+/**
+ * Wrap a validated AG-UI event in an adapter notice.
+ */
+const event = (value: unknown): AdapterNotice => {
   return { event: parseEvent(value), kind: 'event' }
 }
 
+/**
+ * Project native item notifications into ordered AG-UI notices for one run.
+ */
 export class CodexEventMapper {
   private readonly texts = new Map<string, { text: string; ended: boolean }>()
   private readonly tools = new Set<string>()
@@ -19,6 +25,9 @@ export class CodexEventMapper {
     private readonly runId: string
   ) {}
 
+  /**
+   * Validate and project supported notifications, suppressing repeated completed items.
+   */
   accept(method: string, params: unknown): AdapterNotice[] {
     if (method === 'item/agentMessage/delta') {
       const { itemId, delta } = parseProtocol(DeltaSchema, params)
@@ -55,6 +64,9 @@ export class CodexEventMapper {
     return output
   }
 
+  /**
+   * Close any open text messages before the run reaches its terminal outcome.
+   */
   finish(_outcome: AdapterOutcome): AdapterNotice[] {
     const output: AdapterNotice[] = []
     for (const [itemId, state] of this.texts) {

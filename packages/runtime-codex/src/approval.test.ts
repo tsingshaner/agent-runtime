@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 
 import type { AdapterNotice, RuntimeAdapter } from '@qingshaner/runtime'
 
-import { closePeers, deferred, done, input, peer, turn } from '../test/runtime-peer'
+import { closePeers, done, input, peer, turn } from '../test/runtime-peer'
 
 const request = (id: string | number, extra = {}) => ({
   id,
@@ -23,7 +23,7 @@ describe('Codex approvals', () => {
     async (kind) => {
       const p = await peer()
       const session = await p.create()
-      const received = deferred()
+      const received = Promise.withResolvers<void>()
       const notices: AdapterNotice[] = []
       const execution = p.runtime.execute(session, input, (n) => {
         notices.push(n)
@@ -57,7 +57,7 @@ describe('Codex approvals', () => {
   test('preserves numeric versus string requests and restricts unavailable accept decisions', async () => {
     const p = await peer()
     const session = await p.create()
-    const received = deferred()
+    const received = Promise.withResolvers<void>()
     const notices: AdapterNotice[] = []
     const execution = p.runtime.execute(session, input, (n) => {
       notices.push(n)
@@ -90,8 +90,8 @@ describe('Codex approvals', () => {
   test('keeps a timed-out response non-repeatable and accepts late confirmation', async () => {
     const p = await peer(250)
     const session = await p.create()
-    const received = deferred()
-    const resolved = deferred()
+    const received = Promise.withResolvers<void>()
+    const resolved = Promise.withResolvers<void>()
     const execution = p.runtime.execute(session, input, (n) => {
       if (n.kind === 'approval') {
         received.resolve()
@@ -150,9 +150,9 @@ describe('Codex approvals', () => {
   test('orders native resolution after blocked approval persistence', async () => {
     const p = await peer()
     const session = await p.create()
-    const entered = deferred()
-    const gate = deferred()
-    const resolved = deferred()
+    const entered = Promise.withResolvers<void>()
+    const gate = Promise.withResolvers<void>()
+    const resolved = Promise.withResolvers<void>()
     const notices: AdapterNotice[] = []
     const execution = p.runtime.execute(session, input, async (notice) => {
       if (notice.kind === 'approval') {
@@ -181,9 +181,9 @@ describe('Codex approvals', () => {
   test('waits for resolution persistence before acknowledging a response', async () => {
     const p = await peer()
     const session = await p.create()
-    const received = deferred()
-    const entered = deferred()
-    const gate = deferred()
+    const received = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
+    const gate = Promise.withResolvers<void>()
     const execution = p.runtime.execute(session, input, async (notice) => {
       if (notice.kind === 'approval') {
         received.resolve()
@@ -228,7 +228,7 @@ describe('Codex approvals', () => {
   test('rejects an unconfirmed response when the turn terminates', async () => {
     const p = await peer()
     const session = await p.create()
-    const received = deferred()
+    const received = Promise.withResolvers<void>()
     const execution = p.runtime.execute(session, input, (notice) => {
       if (notice.kind === 'approval') {
         received.resolve()
@@ -251,9 +251,9 @@ describe('Codex approvals', () => {
     const dir = await mkdtemp(join(tmpdir(), 'runtime-approval-race-'))
     const p = await peer()
     const native = await p.create()
-    const resolutionEntered = deferred()
-    const releaseResolution = deferred()
-    const approvalPersisted = deferred()
+    const resolutionEntered = Promise.withResolvers<void>()
+    const releaseResolution = Promise.withResolvers<void>()
+    const approvalPersisted = Promise.withResolvers<void>()
     const adapter: RuntimeAdapter = {
       cancel: (runId) => p.runtime.cancel(runId),
       createSession: () => Promise.resolve(native),

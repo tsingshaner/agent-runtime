@@ -18,7 +18,7 @@ afterEach(async () => {
     await rm(directory, { force: true, recursive: true })
   }
 })
-async function setup(directory?: string) {
+const setup = async (directory?: string) => {
   const dir = directory ?? (await mkdtemp(join(tmpdir(), 'runtime-integration-')))
   if (!directory) {
     directories.push(dir)
@@ -28,7 +28,7 @@ async function setup(directory?: string) {
   managers.push(manager)
   return { dir, manager, remote }
 }
-async function create(context: Awaited<ReturnType<typeof setup>>, id = 'native') {
+const create = async (context: Awaited<ReturnType<typeof setup>>, id = 'native') => {
   const pending = context.manager.createSession({ cwd: context.dir, projectId: 'demo', runtime: 'codex' })
   if (context.remote.connections() === 0) {
     await context.remote.handshake()

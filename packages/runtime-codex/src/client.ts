@@ -21,6 +21,9 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>
 }
 
+/**
+ * A child-process JSON-RPC transport with bounded frames, buffered writes, and request timeouts.
+ */
 export class JsonRpcClient {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly options: ClientOptions
@@ -39,6 +42,9 @@ export class JsonRpcClient {
   private queuedBytes = 0
   private writes: Promise<void> = Promise.resolve()
 
+  /**
+   * Spawn the configured executable with piped streams and no shell.
+   */
   constructor(options: ClientOptions) {
     this.options = options
     this.child = spawn(options.command, options.args, {
@@ -76,6 +82,9 @@ export class JsonRpcClient {
     })
   }
 
+  /**
+   * Send a request and await its validated response within the configured timeout.
+   */
   request(method: string, params: Json): Promise<unknown> {
     if (this.failure) {
       return Promise.reject(this.failure)
@@ -98,21 +107,40 @@ export class JsonRpcClient {
     })
   }
 
+  /**
+   * Write a notification without waiting for a remote response.
+   */
   notify(method: string, params: Json): Promise<void> {
     return this.write({ method, params })
   }
+  /**
+   * Write a success response to a native server request.
+   */
   reply(id: string | number, result: Json): Promise<void> {
     return this.write({ id, result })
   }
+  /**
+   * Write an error response to a native server request.
+   */
   replyError(id: string | number, code: number, message: string): Promise<void> {
     return this.write({ error: { code, message }, id })
   }
+  /**
+   * Register a listener for validated frames.
+   *
+   * @returns A function that removes the listener.
+   */
   onFrame(listener: (frame: Frame) => void): () => void {
     this.frames.add(listener)
     return () => {
       this.frames.delete(listener)
     }
   }
+  /**
+   * Register a listener for process closure.
+   *
+   * @returns A function that removes the listener.
+   */
   onExit(listener: (error: RuntimeError) => void): () => void {
     this.exits.add(listener)
     return () => {
@@ -120,6 +148,9 @@ export class JsonRpcClient {
     }
   }
 
+  /**
+   * Reject outstanding requests and shut down the child, escalating to termination if needed.
+   */
   close(): Promise<void> {
     if (!this.closePromise) {
       this.fail(new RuntimeError('PROCESS_EXITED', 'App-server transport closed'))

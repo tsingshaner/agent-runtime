@@ -54,7 +54,10 @@ const relations = defineRelations(schema)
 const activeStatuses = ['starting', 'running', 'waiting_approval', 'cancelling'] as const
 const sessionSelection = { ...getTableColumns(sessions), activeRunId: runs.id }
 
-function toSession(row: typeof sessions.$inferSelect & { activeRunId: string | null }): Session {
+/**
+ * Normalize persisted session timestamps to ISO strings.
+ */
+const toSession = (row: typeof sessions.$inferSelect & { activeRunId: string | null }): Session => {
   return {
     ...row,
     createdAt: new Date(row.createdAt).toISOString(),
@@ -62,11 +65,17 @@ function toSession(row: typeof sessions.$inferSelect & { activeRunId: string | n
   }
 }
 
-function encodeCursor(session: Pick<Session, 'createdAt' | 'id'>): string {
+/**
+ * Encode the timestamp and ID used for stable descending pagination.
+ */
+const encodeCursor = (session: Pick<Session, 'createdAt' | 'id'>): string => {
   return Buffer.from(JSON.stringify({ createdAt: session.createdAt, id: session.id })).toString('base64url')
 }
 
-function decodeCursor(encoded: string | undefined): Cursor | undefined {
+/**
+ * Decode and validate an optional pagination cursor.
+ */
+const decodeCursor = (encoded: string | undefined): Cursor | undefined => {
   if (encoded === undefined) {
     return undefined
   }
@@ -79,7 +88,10 @@ function decodeCursor(encoded: string | undefined): Cursor | undefined {
 
 type Transaction = Parameters<Parameters<PgliteDatabase<typeof relations>['transaction']>[0]>[0]
 
-function toRun(row: typeof runs.$inferSelect): Run {
+/**
+ * Normalize persisted run timestamps to ISO strings.
+ */
+const toRun = (row: typeof runs.$inferSelect): Run => {
   return {
     ...row,
     createdAt: new Date(row.createdAt).toISOString(),
@@ -87,7 +99,10 @@ function toRun(row: typeof runs.$inferSelect): Run {
   }
 }
 
-async function requireRun(db: Transaction | PgliteDatabase<typeof relations>, id: string): Promise<Run> {
+/**
+ * Read a run inside or outside a transaction, rejecting unknown IDs.
+ */
+const requireRun = async (db: Transaction | PgliteDatabase<typeof relations>, id: string): Promise<Run> => {
   const [row] = await db
     .select()
     .from(runs)
@@ -98,7 +113,10 @@ async function requireRun(db: Transaction | PgliteDatabase<typeof relations>, id
   return toRun(row)
 }
 
-async function persistEvent(tx: Transaction, runId: string, event: AgUiEvent): Promise<EventEnvelope> {
+/**
+ * Increment the run sequence and insert its event within the caller's transaction.
+ */
+const persistEvent = async (tx: Transaction, runId: string, event: AgUiEvent): Promise<EventEnvelope> => {
   const [row] = await tx
     .update(runs)
     .set({ lastSequence: sql`${runs.lastSequence} + 1` })
@@ -111,7 +129,10 @@ async function persistEvent(tx: Transaction, runId: string, event: AgUiEvent): P
   return { event, runId, sequence: row.lastSequence, sessionId: row.sessionId }
 }
 
-async function rejectUnknownMigrations(client: PGlite): Promise<void> {
+/**
+ * Reject databases containing migrations not shipped by this SDK.
+ */
+const rejectUnknownMigrations = async (client: PGlite): Promise<void> => {
   const table = await client.query<{ name: string | null }>(
     `select to_regclass('drizzle.__drizzle_migrations')::text as name`
   )
@@ -128,6 +149,9 @@ async function rejectUnknownMigrations(client: PGlite): Promise<void> {
   }
 }
 
+/**
+ * Owns a PGlite database, directory lock, and durable session and event operations.
+ */
 export class SessionStore {
   readonly db: PgliteDatabase<typeof relations>
   private closePromise?: Promise<void>
@@ -142,6 +166,9 @@ export class SessionStore {
     this.db = db
   }
 
+  /**
+   * Acquire directory ownership and apply known migrations before exposing the store.
+   */
   static async open(dataDir: string): Promise<SessionStore> {
     const lock = await acquireDirectoryLock(dataDir)
     let client: PGlite | undefined
@@ -173,6 +200,9 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Finish previously active runs as interrupted and expire their outstanding approvals.
+   */
   async recoverInterrupted(): Promise<void> {
     const unfinished = await this.db.select({ id: runs.id }).from(runs).where(inArray(runs.status, activeStatuses))
     for (const { id } of unfinished) {
@@ -183,6 +213,9 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Latch the first fatal error and wake subscribers so they can observe it.
+   */
   fail(error: RuntimeError): void {
     this.failure ??= error
     for (const listeners of this.listeners.values()) {
@@ -192,6 +225,9 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Reject access after a fatal error or once closing has begun.
+   */
   assertAvailable(): void {
     if (this.failure) {
       throw this.failure
@@ -201,6 +237,9 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Validate and persist a newly created native session under its SDK ID.
+   */
   async insertSession(input: InsertSessionInput): Promise<Session> {
     const validated = parseInput(InsertSessionInputSchema, input)
     const [row] = await this.db.insert(sessions).values(validated).returning()
@@ -210,6 +249,9 @@ export class SessionStore {
     return toSession({ ...row, activeRunId: null })
   }
 
+  /**
+   * Read a managed session together with its current active run ID.
+   */
   async getSession(id: string): Promise<Session> {
     const validatedId = parseInput(SessionIdSchema, id)
     const [row] = await this.db
@@ -225,6 +267,9 @@ export class SessionStore {
     return toSession(row)
   }
 
+  /**
+   * Read a filtered page in descending creation order; archived sessions are excluded by default.
+   */
   async listSessions(filter: SessionFilter = {}): Promise<Page<Session>> {
     const validated = parseInput(SessionFilterSchema, filter)
     const cursor = decodeCursor(validated.cursor)
@@ -252,6 +297,9 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Set archive state atomically, rejecting attempts to archive an active session.
+   */
   async setArchived(id: string, archived: boolean): Promise<void> {
     const validatedId = parseInput(SessionIdSchema, id)
     const validatedArchived = parseInput(ArchivedSchema, archived)
@@ -279,6 +327,9 @@ export class SessionStore {
     })
   }
 
+  /**
+   * Atomically reserve the session's active run and persist its RUN_STARTED event.
+   */
   async beginRun(sessionId: string, runId: string): Promise<Run> {
     parseInput(SessionIdSchema, sessionId)
     parseInput(SessionIdSchema, runId)
@@ -309,10 +360,16 @@ export class SessionStore {
     return run
   }
 
+  /**
+   * Read a run by SDK ID, rejecting unknown runs.
+   */
   getRun(id: string): Promise<Run> {
     return requireRun(this.db, id)
   }
 
+  /**
+   * Read a session's runs in descending creation order with cursor pagination.
+   */
   async listRuns(sessionId: string, page: { limit?: number; cursor?: string } = {}): Promise<Page<Run>> {
     const validated = parseInput(PageInputSchema, page)
     const cursor = decodeCursor(validated.cursor)
@@ -334,6 +391,9 @@ export class SessionStore {
     return { items, nextCursor: rows.length > validated.limit ? encodeCursor(items.at(-1) as Run) : null }
   }
 
+  /**
+   * Record the native turn identity without overwriting cancellation or terminal state.
+   */
   async setNativeTurn(runId: string, nativeTurnId: string): Promise<void> {
     parseInput(SessionIdSchema, nativeTurnId)
     await this.db.transaction(async (tx) => {
@@ -349,6 +409,9 @@ export class SessionStore {
     this.notifyRunChange(runId)
   }
 
+  /**
+   * Validate and persist a non-lifecycle event before notifying subscribers.
+   */
   async appendEvent(runId: string, event: AgUiEvent): Promise<EventEnvelope> {
     const validated = parseEvent(event)
     if ([EventType.RUN_STARTED, EventType.RUN_FINISHED, EventType.RUN_ERROR].some((type) => type === validated.type)) {
@@ -365,6 +428,9 @@ export class SessionStore {
     return envelope
   }
 
+  /**
+   * Atomically finalize an active run, expire approvals, and persist one terminal event.
+   */
   async finishRun(runId: string, outcome: TerminalOutcome): Promise<void> {
     const changed = await this.db.transaction(async (tx) => {
       const run = await requireRun(tx, runId)
@@ -401,6 +467,9 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Persist a native approval once and publish its durable request event.
+   */
   async requestApproval(
     runId: string,
     request: Extract<AdapterNotice, { kind: 'approval' }>['request']
@@ -441,6 +510,9 @@ export class SessionStore {
     return approval
   }
 
+  /**
+   * Atomically claim a pending approval before the native response is attempted.
+   */
   async claimApproval(runId: string, approvalId: string, decision: ApprovalDecision): Promise<Approval> {
     parseInput(SessionIdSchema, runId)
     parseInput(SessionIdSchema, approvalId)
@@ -469,6 +541,9 @@ export class SessionStore {
     })
   }
 
+  /**
+   * Resolve or expire an outstanding approval and persist its resolution event.
+   */
   async resolveApproval(runId: string, nativeRequestId: string | number, responseAttempted?: boolean): Promise<void> {
     await this.db.transaction(async (tx) => {
       await requireRun(tx, runId)
@@ -516,6 +591,9 @@ export class SessionStore {
     this.notifyRunChange(runId)
   }
 
+  /**
+   * Read approvals in pending or responding state for an existing run.
+   */
   async listPendingApprovals(runId: string): Promise<Approval[]> {
     await this.getRun(runId)
     return this.db
@@ -525,6 +603,9 @@ export class SessionStore {
       .orderBy(asc(approvals.id))
   }
 
+  /**
+   * Mark an active run as cancelling while leaving terminal runs unchanged.
+   */
   async markCancelling(runId: string): Promise<Run> {
     return await this.db.transaction(async (tx) => {
       await requireRun(tx, runId)
@@ -536,6 +617,9 @@ export class SessionStore {
     })
   }
 
+  /**
+   * Read ordered events strictly after the supplied run-local sequence.
+   */
   readEventPage(runId: string, afterSequence: number, limit = 128): Promise<EventEnvelope[]> {
     return this.db.transaction(async (tx) => {
       const run = await requireRun(tx, runId)
@@ -560,6 +644,9 @@ export class SessionStore {
     })
   }
 
+  /**
+   * Remove a terminal run's events and retain a marker that prevents later replay.
+   */
   async clearRunEvents(runId: string): Promise<void> {
     await this.db.transaction(async (tx) => {
       const run = await requireRun(tx, runId)
@@ -572,6 +659,11 @@ export class SessionStore {
     this.notifyRunChange(runId)
   }
 
+  /**
+   * Subscribe to committed changes for one run.
+   *
+   * @returns A function that unregisters the listener.
+   */
   onRunChange(runId: string, listener: () => void): () => void {
     let listeners = this.listeners.get(runId)
     if (!listeners) {
@@ -593,10 +685,16 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Replay committed history and follow new events until completion or subscription abort.
+   */
   subscribe(runId: string, options?: { afterSequence?: number; signal?: AbortSignal }): AsyncIterable<EventEnvelope> {
     return subscribeToRun(this, runId, options)
   }
 
+  /**
+   * Wake subscribers, close PGlite, then release directory ownership after successful shutdown.
+   */
   close(): Promise<void> {
     this.fail(new RuntimeError('DISPOSED', 'Store is closing or disposed'))
     this.listeners.clear()

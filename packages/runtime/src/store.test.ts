@@ -11,7 +11,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { acquireDirectoryLock } from './lock'
 import { SessionStore } from './store'
 
-async function seedMigration(dataDir: string, name: string | null): Promise<void> {
+const seedMigration = async (dataDir: string, name: string | null): Promise<void> => {
   const client = await PGlite.create(join(dataDir, 'pgdata'), { relaxedDurability: false })
   try {
     await client.query('insert into drizzle.__drizzle_migrations (hash, created_at, name) values ($1, $2, $3)', [
@@ -24,7 +24,7 @@ async function seedMigration(dataDir: string, name: string | null): Promise<void
   }
 }
 
-async function tryAcquireDirectory(dataDir: string): Promise<{ error: unknown } | { lock: unknown }> {
+const tryAcquireDirectory = async (dataDir: string): Promise<{ error: unknown } | { lock: unknown }> => {
   const result = await acquireDirectoryLock(dataDir).then(
     (lock) => ({ lock }),
     (error: unknown) => ({ error })

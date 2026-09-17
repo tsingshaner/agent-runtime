@@ -5,11 +5,19 @@ import type { EventEnvelope } from './types'
 
 type EventSource = Pick<SessionStore, 'getRun' | 'readEventPage' | 'onRunChange' | 'assertAvailable'>
 
-export function subscribeToRun(
+/**
+ * Replay committed events and wait for new ones without owning execution.
+ *
+ * @param store - Persistent event source and change notifications.
+ * @param runId - SDK run ID.
+ * @param options - Exclusive sequence cursor; abort stops only the subscriber.
+ * @returns An iterable that releases listeners when closed, aborted, or completed.
+ */
+export const subscribeToRun = (
   store: EventSource,
   runId: string,
   options: { afterSequence?: number; signal?: AbortSignal } = {}
-): AsyncIterable<EventEnvelope> {
+): AsyncIterable<EventEnvelope> => {
   return {
     [Symbol.asyncIterator]() {
       let stopped = false

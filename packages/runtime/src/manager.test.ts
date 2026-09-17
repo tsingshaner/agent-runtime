@@ -11,7 +11,7 @@ import { RuntimeManager } from './manager'
 
 import type { EventEnvelope, JsonObject } from './types'
 
-async function collect(events: AsyncIterable<EventEnvelope>): Promise<EventEnvelope[]> {
+const collect = async (events: AsyncIterable<EventEnvelope>): Promise<EventEnvelope[]> => {
   const result: EventEnvelope[] = []
   for await (const event of events) {
     result.push(event)

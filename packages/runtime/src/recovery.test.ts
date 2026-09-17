@@ -12,14 +12,14 @@ import { SessionStore } from './store'
 
 import type { EventEnvelope } from './types'
 
-function gate() {
+const gate = () => {
   let resolve!: () => void
   const promise = new Promise<void>((done) => {
     resolve = done
   })
   return { promise, resolve }
 }
-async function collect(source: AsyncIterable<EventEnvelope>) {
+const collect = async (source: AsyncIterable<EventEnvelope>) => {
   const events: EventEnvelope[] = []
   for await (const event of source) {
     events.push(event)

@@ -13,6 +13,7 @@ ignorePaths:
   - bun.lock.json
   - bun.lock.yaml
   - bun.lock.json
+  - docs/superpowers
 
 words:
   - deepagents

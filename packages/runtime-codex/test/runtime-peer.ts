@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer, type Socket } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
@@ -55,7 +58,9 @@ export const peer = async (requestTimeoutMs = 1000, stateDir?: string) => {
     }
     return new Promise((resolve) => waiting.push({ event, resolve }))
   }
+  const dataDir = stateDir ? join(stateDir, 'native') : await mkdtemp(join(tmpdir(), 'codex-peer-'))
   const runtime = new CodexRuntime({
+    dataDir,
     executable: {
       args: [fakePath, '--control-port', String(address.port), ...(stateDir ? ['--state-dir', stateDir] : [])],
       command: process.execPath
@@ -67,6 +72,9 @@ export const peer = async (requestTimeoutMs = 1000, stateDir?: string) => {
   cleanup.push(async () => {
     await runtime.dispose()
     socket?.destroy()
+    if (!stateDir) {
+      await rm(dataDir, { force: true, recursive: true })
+    }
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   })
   const command = async (value: { action: string; [key: string]: unknown }) => {
@@ -101,8 +109,8 @@ export const peer = async (requestTimeoutMs = 1000, stateDir?: string) => {
     // biome-ignore lint/suspicious/noMisplacedAssertion: Awaited protocol peer invariant.
     assert.equal(Object.hasOwn(initialized, 'id'), false)
   }
-  const create = async (id = 'native') => {
-    const pending = runtime.createSession({ cwd })
+  const create = async (id = 'native', projectId?: string) => {
+    const pending = runtime.createSession({ cwd, projectId })
     if (connections === 0) {
       await handshake()
     }
@@ -121,7 +129,12 @@ export const peer = async (requestTimeoutMs = 1000, stateDir?: string) => {
     create,
     exit: async () => {
       // Observe real transport completion; socket close can precede its exit listener.
-      const client = Reflect.get(runtime, 'client') as object
+      const projects = Reflect.get(runtime, 'projects') as Map<string, Promise<object>>
+      const project = await [...projects.values()][0]
+      if (!project) {
+        throw new Error('Missing project')
+      }
+      const client = Reflect.get(project, 'client') as object
       const exited = Reflect.get(client, 'exited') as Promise<void>
       await command({ action: 'exit' })
       await exited

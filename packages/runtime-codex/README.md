@@ -37,24 +37,36 @@ errors report only a safe status, exit code, and signal.
 
 Requires Node.js 24, an authenticated Codex CLI, and an explicitly selected model.
 Importing the package or constructing CodexRuntime starts no process. The first
-create/resume operation lazily starts one owned app-server per runtime instance.
+create/resume operation lazily starts one owned app-server per project. Sessions in a project share that process;
+different projects have separate processes and native homes.
 
 ```ts
 import { CodexRuntime } from '@qingshaner/runtime-codex'
 
-const runtime = new CodexRuntime()
+const runtime = new CodexRuntime({ dataDir: './.agent-runtime/codex' })
 // Register runtime in RuntimeManager.open({ dataDir, runtimes: [runtime] }).
 // Pass model explicitly to manager.createSession({ projectId, cwd, runtime: 'codex', model }).
 ```
 
-Constructor options: optional `model` default for legacy/direct adapter callers, `codexHome`, `executable` with
+Constructor options: optional `model` default for legacy/direct adapter callers, `dataDir`, `codexHome`, `executable` with
 `command` and `args`, `requestTimeoutMs`, and `shutdownTimeoutMs`. Authentication
-uses the CLI environment/home; never put credentials in session options. No
-configuration file is changed. Manager sessions require a top-level `model`; typed
+copies only `auth.json` from `codexHome` (or `CODEX_HOME` / `~/.codex`) into
+each owned home; never put credentials in session options. User configuration
+is never modified. Native state defaults to `~/.local/share/agent-runtime/codex`;
+set `dataDir` alongside your manager's data directory to own their lifetime together.
+Only an explicitly resumed legacy thread's rollout is copied from the source home;
+other CLI history is not imported. Keep this directory across service restarts.
+An empty native thread is not durable until history is written by Codex.
+
+Each child has an isolated `HOME` and `CODEX_HOME`. Before creating or resuming
+a thread, the adapter clears extra skill roots, disables discovered skills and
+MCP servers, and disables apps. Resource bindings will extend this empty baseline.
+Configuration discovery is refreshed for later sessions. Manager sessions require a top-level `model`; typed
 `CodexSessionOptions` accept only `sandbox` (`workspace-write` default or `read-only`), and `approvalPolicy`
 (`on-request` default or `never`). Native threads always use `ephemeral: false`.
 Input is text only. Command and file-change approvals support one-time approve
-or deny; unsupported interactive requests are declined or fail explicitly.
+or deny. Tool questions use `listPendingInputs` / `respondInput`; unsupported
+interactive requests are declined or fail explicitly.
 
 Use RuntimeManager's public session/run IDs, not native IDs. Disconnecting a
 subscription does not cancel generation while the host lives. `cancel()` sends
@@ -73,3 +85,8 @@ before claiming compatibility. Builds and CI never invoke login or a model.
 Persistent prompts, outputs and approvals can contain sensitive information;
 see the runtime package documentation for ownership locks, event retention,
 manual stale-lock recovery, and `clearRunEvents`.
+
+The no-model project isolation check is opt-in:
+`RUN_CODEX_PROJECT_SMOKE=1 pnpm exec vitest run packages/runtime-codex/test/projects.test.ts`.
+It uses the installed CLI, injects fixture history without a model turn, and verifies
+resource isolation, persistence and targeted legacy resume. It needs no model credentials.

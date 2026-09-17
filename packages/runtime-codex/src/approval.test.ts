@@ -249,7 +249,7 @@ describe('Codex approvals', () => {
   test('expires a native self-resolution racing a durable response claim without sending a reply', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'runtime-approval-race-'))
     const p = await peer()
-    const native = await p.create()
+    const native = await p.create('native', 'race')
     const resolutionEntered = Promise.withResolvers<void>()
     const releaseResolution = Promise.withResolvers<void>()
     const approvalPersisted = Promise.withResolvers<void>()
@@ -297,7 +297,7 @@ describe('Codex approvals', () => {
       })
       expect(await manager.listPendingApprovals(runId)).toMatchObject([{ decision: 'approve', status: 'responding' }])
       // The next received frame must be thread/start, so no native approval response was sent.
-      await p.create('wire-barrier')
+      await p.create('wire-barrier', 'race')
       releaseResolution.resolve()
       await p.send(done())
       const events = []
@@ -315,7 +315,7 @@ describe('Codex approvals', () => {
       await expect(manager.respondApproval(runId, approval.id, 'approve')).rejects.toMatchObject({
         code: 'APPROVAL_NOT_PENDING'
       })
-      await p.create('end-barrier')
+      await p.create('end-barrier', 'race')
     } finally {
       releaseResolution.resolve()
       await manager.dispose()

@@ -1,3 +1,4 @@
+// biome-ignore-all lint/style/useNamingConvention: Native protocol uses snake_case configuration keys.
 import { closeSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { join } from 'node:path'
@@ -17,6 +18,20 @@ if (process.argv.includes('--exit-on-request')) {
   const starts = new Set()
   input.on('line', (line) => {
     const frame = JSON.parse(line)
+    if (frame.method === 'config/read') {
+      process.stdout.write(`${JSON.stringify({ id: frame.id, result: { config: { mcp_servers: {} } } })}\n`)
+      return
+    }
+    if (
+      frame.method === 'skills/extraRoots/set' ||
+      frame.method === 'skills/config/write' ||
+      frame.method === 'skills/list'
+    ) {
+      process.stdout.write(
+        `${JSON.stringify({ id: frame.id, result: frame.method === 'skills/list' ? { data: [{ skills: [] }] } : {} })}\n`
+      )
+      return
+    }
     if (statePath && frame.method === 'thread/start') {
       starts.add(frame.id)
     }

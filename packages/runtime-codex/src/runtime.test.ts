@@ -1,3 +1,4 @@
+// biome-ignore-all lint/style/useNamingConvention: Native protocol uses snake_case configuration keys.
 import { afterEach, describe, expect, test } from 'vitest'
 
 import type { AdapterNotice, JsonObject, NativeSession } from '@qingshaner/runtime'
@@ -27,6 +28,7 @@ describe('CodexRuntime', () => {
     expect(a.params).toEqual({
       approvalPolicy: 'on-request',
       approvalsReviewer: 'user',
+      config: { features: { apps: false }, mcp_servers: {} },
       cwd,
       ephemeral: false,
       model: 'model-test',
@@ -35,6 +37,7 @@ describe('CodexRuntime', () => {
     expect(b.params).toEqual({
       approvalPolicy: 'never',
       approvalsReviewer: 'user',
+      config: { features: { apps: false }, mcp_servers: {} },
       cwd,
       ephemeral: false,
       model: 'override',
@@ -82,7 +85,6 @@ describe('CodexRuntime', () => {
         return result
       })
     const start = await p.request('turn/start')
-    // biome-ignore lint/style/useNamingConvention: Native protocol field.
     expect(start.params).toEqual({ input: [{ text: 'hello', text_elements: [], type: 'text' }], threadId: 'native' })
     await p.send(delta())
     await entered.promise
@@ -131,6 +133,7 @@ describe('CodexRuntime', () => {
     expect(resume.params).toEqual({
       approvalPolicy: 'never',
       approvalsReviewer: 'user',
+      config: { features: { apps: false }, mcp_servers: {} },
       cwd,
       model: 'saved-model',
       sandbox: 'read-only',

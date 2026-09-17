@@ -10,7 +10,7 @@ if (!model) {
 }
 const manager = await RuntimeManager.open({
   dataDir: './.agent-runtime',
-  runtimes: [new CodexRuntime()]
+  runtimes: [new CodexRuntime({ dataDir: './.agent-runtime/codex' })]
 })
 const terminal = process.stdin.isTTY ? createInterface({ input: process.stdin, output: process.stdout }) : undefined
 try {

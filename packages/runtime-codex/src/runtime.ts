@@ -1,332 +1,119 @@
-import { realpath, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
-import {
-  type AdapterNotice,
-  type AdapterOutcome,
-  type ApprovalDecision,
-  type InputAnswers,
-  type Json,
-  type JsonObject,
-  type NativeSession,
-  type RuntimeAdapter,
-  RuntimeError
+import { RuntimeError } from '@qingshaner/runtime'
+
+import type {
+  AdapterNotice,
+  AdapterOutcome,
+  ApprovalDecision,
+  InputAnswers,
+  NativeSession,
+  RuntimeAdapter
 } from '@qingshaner/runtime'
-import * as v from 'valibot'
 
-import { version } from '../package.json'
-import { JsonRpcClient } from './client'
-import { CodexEventMapper } from './events'
-import {
-  ApprovalResponseSchema,
-  CommandApprovalSchema,
-  DeclineElicitationSchema,
-  EmptyAnswersSchema,
-  FileApprovalSchema,
-  type Frame,
-  NoPermissionsSchema,
-  parseProtocol,
-  RequestResolvedSchema,
-  ThreadResponseSchema,
-  TurnNotificationSchema,
-  TurnResponseSchema,
-  UserInputResponseSchema,
-  UserInputSchema
-} from './protocol'
+import { CodexProcess, parseRuntimeOptions } from './process'
 
-import type { InitializeParams } from './schemas/InitializeParams'
-import type { ThreadResumeParams } from './schemas/v2/ThreadResumeParams'
-import type { ThreadStartParams } from './schemas/v2/ThreadStartParams'
-import type { TurnStartParams } from './schemas/v2/TurnStartParams'
+import type { CodexRuntimeOptions, CodexSessionOptions } from './process'
 
-const nonempty = v.pipe(v.string(), v.trim(), v.minLength(1))
-const timeout = v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(2_147_483_647)))
-const OptionsSchema = v.strictObject({
-  codexHome: v.optional(nonempty),
-  executable: v.optional(v.strictObject({ args: v.optional(v.array(v.string())), command: nonempty })),
-  model: v.optional(nonempty),
-  requestTimeoutMs: timeout,
-  shutdownTimeoutMs: timeout
-})
-const SessionOptionsSchema = v.strictObject({
-  approvalPolicy: v.optional(v.picklist(['on-request', 'never']), 'on-request'),
-  model: v.optional(nonempty),
-  sandbox: v.optional(v.picklist(['read-only', 'workspace-write']), 'workspace-write')
-})
-/** Codex settings persisted per session, independently of the common model. */
-export type CodexSessionOptions = Omit<v.InferInput<typeof SessionOptionsSchema>, 'model'>
-/** Process settings and an optional default model for direct adapter callers. */
-export type CodexRuntimeOptions = v.InferInput<typeof OptionsSchema>
-type Notification = Extract<Frame, { kind: 'notification' }>
-type QueueEntry = { frame?: Notification; notice?: AdapterNotice; bytes: number; responseAttempted?: boolean }
-interface PendingResponse {
-  responding: boolean
-  resolved: boolean
-  confirmation?: PromiseWithResolvers<void>
-}
-interface PendingApproval extends PendingResponse {
-  allowedDecisions: ApprovalDecision[]
-}
-interface ActiveRun {
-  runId: string
-  threadId: string
-  turnId?: string
-  client?: JsonRpcClient
-  mapper: CodexEventMapper
-  emit: (notice: AdapterNotice) => Promise<void>
-  queue: QueueEntry[]
-  bytes: number
-  count: number
-  pumping: boolean
-  responseDone: boolean
-  cancelRequested: boolean
-  interrupt?: Promise<void>
-  cancellation?: PromiseWithResolvers<void>
-  approvals: Map<string | number, PendingApproval>
-  inputs: Map<string | number, PendingResponse>
-  fault?: RuntimeError
-  outcome?: AdapterOutcome
-  stopping?: Promise<void>
-  nativeEnded: boolean
-  onNativeEnd?: () => void
-  finished: boolean
-  resolve: (outcome: AdapterOutcome) => void
-}
+export type { CodexRuntimeOptions, CodexSessionOptions } from './process'
 
-/**
- * Validate native runtime input and report INVALID_INPUT on failure.
- */
-const validate = <T extends v.GenericSchema>(schema: T, value: unknown): v.InferOutput<T> => {
-  const result = v.safeParse(schema, value)
-  if (!result.success) {
-    throw new RuntimeError('INVALID_INPUT', 'Invalid Codex runtime input')
-  }
-  return result.output
-}
-/**
- * Preserve SDK faults and normalize other failures to ADAPTER_ERROR.
- */
-const failure = (error: unknown): RuntimeError => {
-  return error instanceof RuntimeError ? error : new RuntimeError('ADAPTER_ERROR', 'Codex runtime operation failed')
-}
-/**
- * Convert a runtime error to a serializable terminal adapter outcome.
- */
-const failed = (error: RuntimeError): AdapterOutcome => {
-  return { error: { code: error.code, message: error.message }, status: 'failed' }
-}
-
-/**
- * Codex adapter with one lazily started app-server process shared by its sessions.
- */
+/** Own one lazy app-server per project, sharing only within the project. */
 export class CodexRuntime implements RuntimeAdapter {
   readonly kind = 'codex'
-  private readonly options: v.InferOutput<typeof OptionsSchema>
-  private client?: JsonRpcClient
-  private starting?: Promise<JsonRpcClient>
+  private readonly options: ReturnType<typeof parseRuntimeOptions>
+  private readonly projects = new Map<string, Promise<CodexProcess>>()
+  private readonly active = new Map<string, Promise<CodexProcess>>()
   private disposed = false
   private closing?: Promise<void>
-  private readonly loaded = new Map<string, Promise<void>>()
-  private readonly runs = new Map<string, ActiveRun>()
-  private readonly threads = new Map<string, ActiveRun>()
 
-  /**
-   * Validate process settings without starting the native process.
-   */
   constructor(options: CodexRuntimeOptions = {}) {
-    this.options = validate(OptionsSchema, options)
+    this.options = parseRuntimeOptions(options)
   }
 
-  /**
-   * Start a native thread with validated session options and a canonical working directory.
-   */
   async createSession(input: {
     cwd: string
     model?: string
     projectId?: string
     options?: CodexSessionOptions
   }): Promise<NativeSession> {
+    const process = await this.project(input.projectId)
     this.checkOpen()
-    const options = this.sessionOptions(input.options ?? {}, input.model)
-    const cwd = await this.directory(input.cwd)
-    const client = await this.start()
-    const params = { cwd, ...options, approvalsReviewer: 'user', ephemeral: false } satisfies ThreadStartParams
-    const result = parseProtocol(ThreadResponseSchema, await client.request('thread/start', params))
-    this.checkClient(client)
-    this.loaded.set(result.thread.id, Promise.resolve())
-    if (input.model === undefined) {
-      return { cwd, nativeSessionId: result.thread.id, options }
-    }
-    const { model, ...runtimeOptions } = options
-    return { cwd, model, nativeSessionId: result.thread.id, options: runtimeOptions, projectId: input.projectId }
+    const session = await process.createSession(input)
+    return { ...session, ...(input.projectId === undefined ? {} : { projectId: input.projectId }) }
   }
 
-  /**
-   * Load a native thread once per process generation, sharing concurrent resume requests.
-   */
   async resumeSession(session: NativeSession): Promise<void> {
+    const process = await this.project(session.projectId)
     this.checkOpen()
-    const nativeSessionId = validate(nonempty, session.nativeSessionId)
-    const options = this.sessionOptions(session.options, session.model)
-    const cwd = await this.directory(session.cwd)
-    const client = await this.start()
-    const existing = this.loaded.get(nativeSessionId)
-    if (existing) {
-      return existing
-    }
-    const resume = (async () => {
-      const params = {
-        cwd,
-        threadId: nativeSessionId,
-        ...options,
-        approvalsReviewer: 'user'
-      } satisfies ThreadResumeParams
-      const result = parseProtocol(ThreadResponseSchema, await client.request('thread/resume', params))
-      this.checkClient(client)
-      if (result.thread.id !== nativeSessionId) {
-        throw new RuntimeError('PROTOCOL_ERROR', 'Resumed thread identity does not match')
-      }
-    })()
-    this.loaded.set(nativeSessionId, resume)
-    try {
-      await resume
-    } catch (error) {
-      if (this.loaded.get(nativeSessionId) === resume) {
-        this.loaded.delete(nativeSessionId)
-      }
-      throw error
-    }
+    await process.resumeSession(session)
   }
 
-  /**
-   * Execute one native turn and deliver ordered notices with persistence backpressure.
-   *
-   * @param session - Native session identity and effective options.
-   * @param input - SDK identities and user text.
-   * @param emit - Async consumer awaited before advancing the notice queue.
-   * @returns The terminal outcome after queued notices have been delivered.
-   */
   async execute(
     session: NativeSession,
     input: { sessionId: string; runId: string; text: string },
     emit: (notice: AdapterNotice) => Promise<void>
   ): Promise<AdapterOutcome> {
     this.checkOpen()
-    validate(v.strictObject({ runId: nonempty, sessionId: nonempty, text: nonempty }), input)
-    validate(nonempty, session.nativeSessionId)
-    if (this.runs.has(input.runId) || this.threads.has(session.nativeSessionId)) {
-      throw new RuntimeError('RUN_CONFLICT', 'Session already has an active run')
+    if (this.active.has(input.runId)) {
+      throw new RuntimeError('RUN_CONFLICT', 'Run already exists')
     }
-    return await new Promise<AdapterOutcome>((resolve) => {
-      const run: ActiveRun = {
-        approvals: new Map(),
-        bytes: 0,
-        cancelRequested: false,
-        count: 0,
-        emit,
-        finished: false,
-        inputs: new Map(),
-        mapper: new CodexEventMapper(input.sessionId, input.runId),
-        nativeEnded: false,
-        pumping: false,
-        queue: [],
-        resolve,
-        responseDone: false,
-        runId: input.runId,
-        threadId: session.nativeSessionId
+    const pending = this.project(session.projectId)
+    this.active.set(input.runId, pending)
+    try {
+      const process = await pending
+      this.checkOpen()
+      return await process.execute(session, input, emit)
+    } catch (error) {
+      if (!this.disposed) {
+        throw error
       }
-      this.runs.set(input.runId, run)
-      this.threads.set(session.nativeSessionId, run)
-      void this.begin(run, session, input.text)
-    })
+      return {
+        error: { code: 'PROCESS_EXITED', message: 'Runtime disposed before execution completed' },
+        status: 'failed'
+      }
+    } finally {
+      this.active.delete(input.runId)
+    }
   }
 
-  /**
-   * Interrupt the selected native turn; repeated calls share its cancellation acknowledgement.
-   */
   async cancel(runId: string): Promise<void> {
     this.checkOpen()
-    const run = this.runs.get(runId)
-    if (!run || run.finished || run.outcome) {
-      return
-    }
-    run.cancelRequested = true
-    run.cancellation ??= Promise.withResolvers<void>()
-    this.sendCancellation(run)
-    await run.cancellation.promise
+    await (await this.active.get(runId))?.cancel(runId)
   }
 
-  /**
-   * Send one native approval response and wait for request resolution.
-   *
-   * @throws {@link RuntimeError} if the request is unavailable, already claimed, or not confirmed.
-   */
   async respondApproval(runId: string, nativeRequestId: string | number, decision: ApprovalDecision): Promise<void> {
     this.checkOpen()
-    const run = this.runs.get(runId)
-    const approval = run?.approvals.get(nativeRequestId)
-    if (!(run?.client && approval)) {
+    const process = await this.active.get(runId)
+    if (!process) {
       throw new RuntimeError('APPROVAL_NOT_FOUND', 'No approval request for run')
     }
-    if (approval.responding || approval.resolved) {
-      throw new RuntimeError('APPROVAL_NOT_PENDING', 'Approval is not pending')
-    }
-    if (!approval.allowedDecisions.includes(decision)) {
-      throw new RuntimeError('INVALID_INPUT', 'Decision is not allowed')
-    }
-    approval.responding = true
-    const confirmation = Promise.withResolvers<void>()
-    approval.confirmation = confirmation
-    const uncertain = () => new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Approval response was not confirmed')
-    const timer = setTimeout(() => confirmation.reject(uncertain()), this.options.requestTimeoutMs ?? 15_000)
-    // Observe confirmation before writing: a very fast native resolution may arrive first.
-    const result = confirmation.promise.finally(() => clearTimeout(timer))
-    void run.client
-      .reply(
-        nativeRequestId,
-        parseProtocol(ApprovalResponseSchema, { decision: decision === 'approve' ? 'accept' : 'decline' })
-      )
-      .catch(() => confirmation.reject(uncertain()))
-    await result
+    await process.respondApproval(runId, nativeRequestId, decision)
   }
 
-  /** Answer questions without granting tool permissions, awaiting native resolution. */
   async respondInput(runId: string, nativeRequestId: string | number, answers: InputAnswers): Promise<void> {
     this.checkOpen()
-    const run = this.runs.get(runId)
-    const input = run?.inputs.get(nativeRequestId)
-    if (!(run?.client && input)) {
+    const process = await this.active.get(runId)
+    if (!process) {
       throw new RuntimeError('INPUT_NOT_FOUND', 'No input request for run')
     }
-    if (input.responding || input.resolved) {
-      throw new RuntimeError('INPUT_NOT_PENDING', 'Input is not pending')
-    }
-    const payload = parseProtocol(UserInputResponseSchema, {
-      answers: Object.fromEntries(Object.entries(answers).map(([id, values]) => [id, { answers: values }]))
-    })
-    input.responding = true
-    const confirmation = Promise.withResolvers<void>()
-    input.confirmation = confirmation
-    const uncertain = () => new RuntimeError('INPUT_RESPONSE_UNCERTAIN', 'Input response was not confirmed')
-    const timer = setTimeout(() => confirmation.reject(uncertain()), this.options.requestTimeoutMs ?? 15_000)
-    const result = confirmation.promise.finally(() => clearTimeout(timer))
-    void run.client.reply(nativeRequestId, payload).catch(() => confirmation.reject(uncertain()))
-    await result
+    await process.respondInput(runId, nativeRequestId, answers)
   }
 
-  /**
-   * Close the shared app-server and fail unfinished runs; repeated calls share completion.
-   */
   dispose(): Promise<void> {
-    if (!this.closing) {
-      this.disposed = true
-      this.closing = (async () => {
-        await this.client?.close()
-        for (const run of this.runs.values()) {
-          this.fail(run, new RuntimeError('PROCESS_EXITED', 'Codex runtime disposed'))
-        }
-        this.loaded.clear()
-      })()
-    }
+    this.disposed = true
+    this.closing ??= (async () => {
+      const children = await Promise.allSettled(this.projects.values())
+      const results = await Promise.allSettled(
+        children.filter((child) => child.status === 'fulfilled').map((child) => child.value.dispose())
+      )
+      const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason)
+      if (errors.length > 0) {
+        throw new AggregateError(errors, 'Failed to close project processes')
+      }
+    })()
     return this.closing
   }
 
@@ -335,476 +122,44 @@ export class CodexRuntime implements RuntimeAdapter {
       throw new RuntimeError('DISPOSED', 'Codex runtime disposed')
     }
   }
-  private checkClient(client: JsonRpcClient): void {
+
+  private project(projectId?: string): Promise<CodexProcess> {
     this.checkOpen()
-    if (this.client !== client) {
-      throw new RuntimeError('PROCESS_EXITED', 'App-server generation ended')
+    if (projectId !== undefined && (typeof projectId !== 'string' || !projectId.trim())) {
+      throw new RuntimeError('INVALID_INPUT', 'Invalid project ID')
     }
-  }
-  private sessionOptions(value: unknown, model?: string) {
-    const options = validate(SessionOptionsSchema, value)
-    return {
-      ...options,
-      model: validate(nonempty, model ?? options.model ?? this.options.model)
-    }
-  }
-  private async directory(value: string): Promise<string> {
-    validate(nonempty, value)
-    try {
-      const cwd = await realpath(value)
-      if (!(await stat(cwd)).isDirectory()) {
-        throw new Error('Not a directory')
-      }
-      return cwd
-    } catch {
-      throw new RuntimeError('INVALID_INPUT', 'Working directory must exist and be a directory')
-    }
-  }
-
-  private start(): Promise<JsonRpcClient> {
-    this.checkOpen()
-    if (!this.starting) {
-      const executable = this.options.executable ?? { command: 'codex' }
-      const client = new JsonRpcClient({
-        args: [...(executable.args ?? []), 'app-server'],
-        command: executable.command,
-        // biome-ignore lint/style/useNamingConvention: Native environment variable.
-        env: this.options.codexHome ? { ...process.env, CODEX_HOME: this.options.codexHome } : process.env,
-        requestTimeoutMs: this.options.requestTimeoutMs,
-        shutdownTimeoutMs: this.options.shutdownTimeoutMs
+    const key = projectId ?? ''
+    let pending = this.projects.get(key)
+    if (!pending) {
+      pending = this.prepareProject(key).catch((error: unknown) => {
+        this.projects.delete(key)
+        throw error
       })
-      this.client = client
-      client.onFrame((frame) => {
-        if (this.client === client) {
-          this.route(client, frame)
-        }
-      })
-      client.onExit((error) => {
-        if (this.client === client) {
-          this.client = undefined
-          this.starting = undefined
-          this.loaded.clear()
-        }
-        for (const run of this.runs.values()) {
-          if (run.client !== client || (run.nativeEnded && run.responseDone)) {
-            continue
-          }
-          run.nativeEnded = true
-          run.onNativeEnd?.()
-          this.fail(run, error)
-        }
-      })
-      this.starting = (async () => {
-        try {
-          const params = {
-            capabilities: null,
-            clientInfo: { name: 'agent-runtime', title: null, version }
-          } satisfies InitializeParams
-          await client.request('initialize', params)
-          await client.notify('initialized', {})
-          this.checkClient(client)
-          return client
-        } catch (error) {
-          await client.close()
-          throw error
-        }
-      })()
+      this.projects.set(key, pending)
     }
-    return this.starting
+    return pending
   }
 
-  private async begin(run: ActiveRun, session: NativeSession, text: string): Promise<void> {
-    try {
-      await this.resumeSession(session)
-      this.checkOpen()
-      if (run.finished) {
-        return
-      }
-      const client = this.client
-      if (!client) {
-        throw new RuntimeError('PROCESS_EXITED', 'App-server generation ended before turn start')
-      }
-      run.client = client
-      const params = {
-        // biome-ignore lint/style/useNamingConvention: Native protocol field.
-        input: [{ text, text_elements: [], type: 'text' }],
-        threadId: session.nativeSessionId
-      } satisfies TurnStartParams
-      const { turn } = parseProtocol(TurnResponseSchema, await client.request('turn/start', params))
-      if (run.finished) {
-        return
-      }
-      if (run.turnId && run.turnId !== turn.id) {
-        this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Started turn identity does not match notifications'))
-        await client.close()
-        return
-      }
-      this.bind(run, turn.id)
-      run.responseDone = true
-      if (turn.status !== 'inProgress') {
-        this.route(client, { kind: 'notification', method: 'turn/completed', params: { threadId: run.threadId, turn } })
-      }
-      this.pump(run)
-    } catch (error) {
-      run.responseDone = true
-      this.fail(run, failure(error))
-    }
-  }
-
-  private route(client: JsonRpcClient, frame: Frame): void {
-    if (frame.kind === 'server-request') {
-      this.handleRequest(client, frame)
-      return
-    }
-    if (
-      frame.kind !== 'notification' ||
-      !frame.params ||
-      typeof frame.params !== 'object' ||
-      Array.isArray(frame.params)
-    ) {
-      return
-    }
-    const threadId = frame.params.threadId
-    if (typeof threadId !== 'string') {
-      return
-    }
-    const run = this.threads.get(threadId)
-    if (!run || run.client !== client || run.finished) {
-      return
-    }
-    const method = frame.method
-    if (method === 'serverRequest/resolved') {
-      this.resolveRequest(run, frame)
-      return
-    }
-    if (
-      ![
-        'turn/started',
-        'turn/completed',
-        'item/started',
-        'item/completed',
-        'item/agentMessage/delta',
-        'item/commandExecution/outputDelta',
-        'item/fileChange/outputDelta',
-        'error'
-      ].includes(method)
-    ) {
-      return
-    }
-    const turnId =
-      method === 'turn/started' || method === 'turn/completed'
-        ? parseProtocol(TurnNotificationSchema, frame.params).turn.id
-        : frame.params.turnId
-    if (typeof turnId !== 'string' || (run.turnId && run.turnId !== turnId)) {
-      return
-    }
-    this.bind(run, turnId)
-    if (method === 'turn/completed') {
-      run.nativeEnded = true
-      run.onNativeEnd?.()
-    }
-    if (run.fault) {
-      return
-    }
-    this.enqueue(run, { bytes: Buffer.byteLength(JSON.stringify(frame)), frame })
-  }
-
-  private handleRequest(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
-    if (
-      frame.method === 'item/commandExecution/requestApproval' ||
-      frame.method === 'item/fileChange/requestApproval'
-    ) {
-      this.requestApproval(client, frame)
-      return
-    }
-    let result: Json | undefined
-    switch (frame.method) {
-      case 'item/tool/requestUserInput':
-        this.requestInput(client, frame)
-        return
-      case 'mcpServer/elicitation/request':
-        result = parseProtocol(DeclineElicitationSchema, { _meta: null, action: 'decline', content: null })
-        break
-      case 'item/permissions/requestApproval':
-        result = parseProtocol(NoPermissionsSchema, { permissions: {}, scope: 'turn' })
-        break
-    }
-    if (result !== undefined) {
-      void client.reply(frame.id, result).catch(() => client.close())
-      return
-    }
-    const params = frame.params
-    const threadId = params && typeof params === 'object' && !Array.isArray(params) ? params.threadId : undefined
-    const run = typeof threadId === 'string' ? this.threads.get(threadId) : undefined
-    void client.replyError(frame.id, -32601, 'Unsupported server request').then(
-      () => {
-        if (run && run.client === client && !run.finished) {
-          this.fail(run, new RuntimeError('UNSUPPORTED_REQUEST', 'Unsupported native request'))
-        } else {
-          void client.close()
-        }
-      },
-      () => client.close()
+  private async prepareProject(projectId: string): Promise<CodexProcess> {
+    const root = join(
+      this.options.dataDir ?? join(homedir(), '.local', 'share', 'agent-runtime', 'codex'),
+      createHash('sha256').update(projectId).digest('hex')
     )
-  }
-
-  private resolveRequest(run: ActiveRun, frame: Notification): void {
-    const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
-    const approval = run.approvals.get(requestId) ?? run.inputs.get(requestId)
-    if (!approval || approval.resolved) {
-      return
-    }
-    approval.resolved = true
-    this.enqueue(run, {
-      bytes: Buffer.byteLength(JSON.stringify(frame)),
-      frame,
-      responseAttempted: approval.responding
-    })
-  }
-
-  private requestApproval(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
-    const command = frame.method === 'item/commandExecution/requestApproval'
-    const params = parseProtocol(command ? CommandApprovalSchema : FileApprovalSchema, frame.params)
-    const run = this.threads.get(params.threadId)
-    if (
-      !run ||
-      run.client !== client ||
-      run.finished ||
-      run.nativeEnded ||
-      (run.turnId && run.turnId !== params.turnId)
-    ) {
-      void client
-        .reply(frame.id, parseProtocol(ApprovalResponseSchema, { decision: 'decline' }))
-        .catch(() => client.close())
-      return
-    }
-    if (run.approvals.has(frame.id) || run.inputs.has(frame.id)) {
-      this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native approval request'))
-      return
-    }
-    this.bind(run, params.turnId)
-    const available = params.availableDecisions
-    const allowedDecisions: ApprovalDecision[] = []
-    if (!available || available.includes('accept')) {
-      allowedDecisions.push('approve')
-    }
-    if (!available || available.includes('decline')) {
-      allowedDecisions.push('deny')
-    }
-    if (allowedDecisions.length === 0) {
-      void client.replyError(frame.id, -32601, 'No supported approval decision').then(
-        () => this.fail(run, new RuntimeError('UNSUPPORTED_APPROVAL', 'No supported approval decision')),
-        () => client.close()
-      )
-      return
-    }
-    run.approvals.set(frame.id, { allowedDecisions, resolved: false, responding: false })
-    const detail = JSON.parse(JSON.stringify(params)) as JsonObject
-    this.enqueue(run, {
-      bytes: Buffer.byteLength(JSON.stringify(frame)),
-      notice: {
-        kind: 'approval',
-        request: { allowedDecisions, detail, kind: command ? 'command' : 'file-change', nativeRequestId: frame.id }
+    const home = join(root, 'codex')
+    const userHome = join(root, 'user')
+    await mkdir(home, { mode: 0o700, recursive: true })
+    await mkdir(userHome, { mode: 0o700, recursive: true })
+    const authHome = this.options.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), '.codex')
+    try {
+      await copyFile(join(authHome, 'auth.json'), join(home, 'auth.json'))
+      await chmod(join(home, 'auth.json'), 0o600)
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        throw error
       }
-    })
-  }
-
-  private requestInput(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
-    const params = parseProtocol(UserInputSchema, frame.params)
-    const run = this.threads.get(params.threadId)
-    if (
-      !run ||
-      run.client !== client ||
-      run.finished ||
-      run.nativeEnded ||
-      (run.turnId && run.turnId !== params.turnId)
-    ) {
-      void client.reply(frame.id, parseProtocol(EmptyAnswersSchema, { answers: {} })).catch(() => client.close())
-      return
     }
-    if (run.inputs.has(frame.id) || run.approvals.has(frame.id)) {
-      this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native input request'))
-      return
-    }
-    this.bind(run, params.turnId)
-    run.inputs.set(frame.id, { resolved: false, responding: false })
-    this.enqueue(run, {
-      bytes: Buffer.byteLength(JSON.stringify(frame)),
-      notice: { kind: 'input', request: { nativeRequestId: frame.id, questions: params.questions } }
-    })
-  }
-
-  private sendCancellation(run: ActiveRun): void {
-    if (run.cancelRequested && run.turnId && run.cancellation) {
-      void this.interrupt(run).then(run.cancellation.resolve, run.cancellation.reject)
-    }
-  }
-
-  private bind(run: ActiveRun, turnId: string): void {
-    if (!run.turnId) {
-      run.turnId = turnId
-      this.enqueue(run, { bytes: turnId.length, notice: { kind: 'started', nativeTurnId: turnId } })
-    }
-    this.sendCancellation(run)
-  }
-
-  private interrupt(run: ActiveRun): Promise<void> {
-    if (!run.interrupt && run.client && run.turnId) {
-      run.interrupt = run.client
-        .request('turn/interrupt', { threadId: run.threadId, turnId: run.turnId })
-        .then(() => {})
-        .catch((cause: unknown) => {
-          if (cause instanceof RuntimeError && cause.code === 'RPC_TIMEOUT') {
-            throw new RuntimeError('CANCEL_TIMEOUT', 'Cancellation request timed out', { cause })
-          }
-          throw cause
-        })
-    }
-    return run.interrupt ?? Promise.resolve()
-  }
-
-  private enqueue(run: ActiveRun, entry: QueueEntry): void {
-    if (run.finished || run.fault || run.outcome) {
-      return
-    }
-    if (run.count + 1 > 1024 || run.bytes + entry.bytes > 8 * 1024 * 1024) {
-      this.fail(run, new RuntimeError('STREAM_OVERFLOW', 'Run notification queue exceeded its limit'))
-      return
-    }
-    run.queue.push(entry)
-    run.count++
-    run.bytes += entry.bytes
-    this.pump(run)
-  }
-
-  private fail(run: ActiveRun, error: RuntimeError): void {
-    if (run.finished || run.fault) {
-      return
-    }
-    run.fault = error
-    // Failed runs explicitly discard pending frames; already awaited output stays ordered.
-    run.queue.length = 0
-    run.outcome = failed(error)
-    run.responseDone = true
-    run.stopping = (async () => {
-      if (!run.client || run.nativeEnded) {
-        return
-      }
-      if (!run.turnId) {
-        await run.client.close()
-        return
-      }
-      let timer: ReturnType<typeof setTimeout> | undefined
-      try {
-        await this.interrupt(run)
-        if (!run.nativeEnded) {
-          await new Promise<void>((resolve, reject) => {
-            run.onNativeEnd = resolve
-            timer = setTimeout(
-              () => reject(new RuntimeError('RPC_TIMEOUT', 'Native interruption was not confirmed')),
-              this.options.requestTimeoutMs ?? 15_000
-            )
-          })
-        }
-      } catch {
-        await run.client.close()
-      } finally {
-        clearTimeout(timer)
-        run.onNativeEnd = undefined
-      }
-    })()
-    this.pump(run)
-  }
-
-  private pump(run: ActiveRun): void {
-    if (run.pumping || run.finished) {
-      return
-    }
-    run.pumping = true
-    void this.drain(run)
-      .catch(async (error) => {
-        if (run.fault) {
-          await run.stopping
-          this.complete(run, failed(run.fault))
-        } else {
-          this.fail(run, failure(error))
-        }
-      })
-      .finally(() => {
-        run.pumping = false
-        if (!run.finished && (run.queue.length > 0 || (run.outcome && run.responseDone))) {
-          this.pump(run)
-        }
-      })
-  }
-
-  private async drain(run: ActiveRun): Promise<void> {
-    let entry = run.queue.shift()
-    while (entry) {
-      if (entry.notice) {
-        await run.emit(entry.notice)
-      }
-      if (entry.frame) {
-        await this.project(run, entry.frame, entry.responseAttempted)
-      }
-      run.count--
-      run.bytes -= entry.bytes
-      entry = run.queue.shift()
-    }
-    if (run.outcome && run.responseDone) {
-      await run.stopping
-      for (const notice of run.mapper.finish(run.outcome)) {
-        await run.emit(notice)
-      }
-      this.complete(run, run.outcome)
-    }
-  }
-
-  private async project(run: ActiveRun, frame: Notification, responseAttempted?: boolean): Promise<void> {
-    if (frame.method === 'serverRequest/resolved') {
-      const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
-      const input = run.inputs.get(requestId)
-      await run.emit({
-        kind: input ? 'input-resolved' : 'approval-resolved',
-        nativeRequestId: requestId,
-        responseAttempted
-      })
-      ;(input ?? run.approvals.get(requestId))?.confirmation?.resolve()
-      return
-    }
-    if (frame.method !== 'turn/completed') {
-      for (const notice of run.mapper.accept(frame.method, frame.params)) {
-        await run.emit(notice)
-      }
-      return
-    }
-    const { turn } = parseProtocol(TurnNotificationSchema, frame.params)
-    if (turn.status === 'inProgress') {
-      throw new RuntimeError('PROTOCOL_ERROR', 'Completed turn is still in progress')
-    }
-    run.outcome ??=
-      turn.status === 'completed'
-        ? { status: 'succeeded' }
-        : turn.status === 'interrupted'
-          ? { status: 'cancelled' }
-          : failed(new RuntimeError('RUN_FAILED', 'Codex turn failed'))
-  }
-
-  private complete(run: ActiveRun, outcome: AdapterOutcome): void {
-    run.finished = true
-    run.cancellation?.resolve()
-    for (const approval of run.approvals.values()) {
-      approval.confirmation?.reject(
-        new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Run ended before approval confirmation')
-      )
-    }
-    for (const input of run.inputs.values()) {
-      input.confirmation?.reject(new RuntimeError('INPUT_RESPONSE_UNCERTAIN', 'Run ended before input confirmation'))
-    }
-    run.inputs.clear()
-    run.approvals.clear()
-    this.runs.delete(run.runId)
-    this.threads.delete(run.threadId)
-    run.resolve(outcome)
+    await writeFile(join(home, 'config.toml'), '[features]\napps = false\n', { mode: 0o600 })
+    this.checkOpen()
+    return new CodexProcess({ ...this.options, codexHome: home }, userHome, authHome)
   }
 }

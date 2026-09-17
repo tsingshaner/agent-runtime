@@ -136,7 +136,12 @@ describe('public Codex SDK integration', () => {
       result: { cwd: first.dir, model: 'session-model', thread: { id: session.nativeSessionId } }
     })
     await expect(pending).resolves.toMatchObject({ id: session.id, nativeSessionId: session.nativeSessionId })
-    const unknown = second.remote.runtime.resumeSession({ cwd: first.dir, nativeSessionId: 'unknown', options: {} })
+    const unknown = second.remote.runtime.resumeSession({
+      cwd: first.dir,
+      nativeSessionId: 'unknown',
+      options: {},
+      projectId: session.projectId
+    })
     const rejected = expect(unknown).rejects.toMatchObject({ code: 'RPC_ERROR' })
     expect((await second.remote.request('thread/resume')).params.threadId).toBe('unknown')
     await rejected

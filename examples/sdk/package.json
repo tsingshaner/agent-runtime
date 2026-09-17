@@ -7,11 +7,16 @@
   },
   "scripts": {
     "start": "pnpm --workspace-root build && node main.ts",
-    "smoke": "pnpm --workspace-root build && node smoke.ts"
+    "smoke": "pnpm --workspace-root build && node smoke.ts",
+    "smoke:resources": "pnpm --workspace-root build && node resources-smoke.ts"
   },
   "dependencies": {
     "@qingshaner/runtime": "workspace:*",
     "@qingshaner/runtime-codex": "workspace:*",
-    "@qingshaner/memory": "workspace:*"
+    "@qingshaner/memory": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@qingshaner/knowledge": "workspace:*",
+    "@qingshaner/skill": "workspace:*",
+    "@qingshaner/mcp": "workspace:*"
   }
 }

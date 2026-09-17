@@ -11,10 +11,11 @@ import type {
   ApprovalDecision,
   InputAnswers,
   NativeSession,
+  ResourceSnapshot,
   RuntimeAdapter
 } from '@qingshaner/runtime'
 
-import { CodexProcess, parseRuntimeOptions } from './process'
+import { CodexProcess, parseRuntimeOptions, resourceConfig } from './process'
 
 import type { CodexRuntimeOptions, CodexSessionOptions } from './process'
 
@@ -26,6 +27,7 @@ export class CodexRuntime implements RuntimeAdapter {
   private readonly options: ReturnType<typeof parseRuntimeOptions>
   private readonly projects = new Map<string, Promise<CodexProcess>>()
   private readonly active = new Map<string, Promise<CodexProcess>>()
+  private readonly resources = new Map<string, ResourceSnapshot>()
   private disposed = false
   private closing?: Promise<void>
 
@@ -117,6 +119,21 @@ export class CodexRuntime implements RuntimeAdapter {
     return this.closing
   }
 
+  configureProject = async (projectId: string, snapshot: ResourceSnapshot): Promise<void> => {
+    this.checkOpen()
+    if (JSON.stringify(this.resources.get(projectId)) === JSON.stringify(snapshot)) {
+      return
+    }
+    const previous = this.projects.get(projectId)
+    if (previous && [...this.active.values()].includes(previous)) {
+      throw new RuntimeError('RESOURCES_UPDATING', 'Project has active runs')
+    }
+    if (previous) {
+      await (await previous).updateResources(snapshot)
+    }
+    this.resources.set(projectId, snapshot)
+  }
+
   private checkOpen(): void {
     if (this.disposed) {
       throw new RuntimeError('DISPOSED', 'Codex runtime disposed')
@@ -158,8 +175,9 @@ export class CodexRuntime implements RuntimeAdapter {
         throw error
       }
     }
-    await writeFile(join(home, 'config.toml'), '[features]\napps = false\n', { mode: 0o600 })
+    const resources = this.resources.get(projectId)
+    await writeFile(join(home, 'config.toml'), resourceConfig(resources), { mode: 0o600 })
     this.checkOpen()
-    return new CodexProcess({ ...this.options, codexHome: home }, userHome, authHome)
+    return new CodexProcess({ ...this.options, codexHome: home }, userHome, authHome, resources)
   }
 }

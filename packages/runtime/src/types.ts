@@ -1,5 +1,7 @@
 import type { EventSchemas, EventType } from '@ag-ui/core'
 
+import type { ProjectResources, ResourceSnapshot } from './resources'
+
 /**
  * An event validated against the AG-UI event schemas.
  */
@@ -249,6 +251,7 @@ export interface RuntimeAdapter {
    * Unique runtime key used to select this adapter.
    */
   readonly kind: string
+  configureProject?(projectId: string, snapshot: ResourceSnapshot): Promise<void>
   /**
    * Create a native session and return its effective working directory and options.
    */
@@ -317,6 +320,7 @@ export interface SessionFilter {
  * Persistent data directory and runtime adapters owned by the manager.
  */
 export interface ManagerOptions<A extends RuntimeAdapter = RuntimeAdapter> {
+  resources?: ProjectResources
   memory?: MemoryProvider
   memoryTimeoutMs?: number
   /**

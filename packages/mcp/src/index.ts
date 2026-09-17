@@ -51,6 +51,7 @@ const configSchema = v.variant('transport', [
 export type McpConfig = v.InferInput<typeof configSchema>
 export type McpServer = v.InferOutput<typeof configSchema> & { id: string }
 export interface McpConnection {
+  check: () => Promise<void>
   tools: Tool[]
   callTool: (name: string, args: Record<string, unknown>) => Promise<CallToolResult>
   close: () => Promise<void>
@@ -241,6 +242,7 @@ export class Mcp {
     const cleanup: (() => Promise<void>)[] = []
     const secrets: string[] = []
     const owners = new Map<string, { client: Client; timeoutMs: number }>()
+    const clients: { client: Client; timeoutMs: number }[] = []
     const tools: Tool[] = []
     let closed = false
     let closePromise: Promise<void> | undefined
@@ -271,6 +273,23 @@ export class Mcp {
             throw new FileError('MCP_TIMEOUT', 'MCP request timed out')
           }
           throw new FileError('MCP_CALL_FAILED', 'MCP tool call failed')
+        }
+      },
+      check: async () => {
+        if (closed) {
+          throw new FileError('DISPOSED', 'MCP connection closed')
+        }
+        try {
+          const current: Tool[] = []
+          for (const { client, timeoutMs } of clients) {
+            current.push(...(await discover(client, timeoutMs)))
+          }
+          if (JSON.stringify(redact(current, secrets)) !== JSON.stringify(tools)) {
+            throw new FileError('MCP_CHANGED', 'MCP tool inventory changed; apply resources again')
+          }
+        } catch (error) {
+          await connection.close()
+          throw error
         }
       },
       close: () =>
@@ -349,6 +368,7 @@ export class Mcp {
           }
         })
         await client.connect(transport, { timeout: config.timeoutMs })
+        clients.push({ client, timeoutMs: config.timeoutMs })
         for (const tool of await discover(client, config.timeoutMs)) {
           if (owners.has(tool.name)) {
             throw new FileError('TOOL_CONFLICT', 'MCP tool names conflict')

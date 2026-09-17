@@ -94,3 +94,36 @@ individual records remain addressable by run ID.
 The provider must also bound its underlying I/O (the official SDK does).
 The SDK example accepts `MEMORY_ENDPOINT`, `MEMORY_API_KEY` and
 `MEMORY_SERVICE_ID`, and prints recall degradation and memory write state.
+
+### Project resources
+
+Create `new ProjectResources({ knowledge, skills, mcp })` and pass it as
+`RuntimeManager.open({ resources, ... })`. Preparation validates the enabled
+project set before model execution. A private loopback MCP bridge exposes
+`knowledge_search`, `knowledge_read` and the enabled upstream MCP tools.
+Knowledge reads return the complete current document; edits need no reload.
+The bridge checks the actual upstream connections before each run. A broken
+connection blocks later runs until resources are explicitly reapplied.
+
+Use `await manager.updateProjectResources(projectId, async () => { ... })` for
+bindings, skill edits and MCP changes. It pauses new runs and native session
+creation/resume, drains existing runs, applies mutations, rebuilds the bridge,
+and asks the adapter to apply the new snapshot. Query, input, approval and cancel
+remain available while waiting. Direct resource mutations outside this boundary
+are detected at the next preparation and require explicit reapplication.
+
+Codex uses its verified `skills/extraRoots/set`, allowlist and
+`config/mcpServer/reload` path after drain, preserving empty native sessions
+(which have no on-disk rollout to resume after a process restart). There is still
+one process per project. The ordinary process-exit recovery path remains intact.
+Project configuration cannot shadow the managed bridge URL or authorization.
+No runtime or adapter is imported by the Knowledge, Skills or MCP packages.
+
+Explicit real resource smoke:
+`RUN_RESOURCE_SMOKE=1 CODEX_MODEL=<model> pnpm --filter @internal/sdk-example smoke:resources`.
+On 2026-09-17, Codex 0.153.4 / gpt-6-astra verified two isolated projects,
+knowledge search/read, imported skills, stdio + HTTP MCP calls, explicit managed
+tool approvals, and existing-session changes after native reload. Initial runs
+exposed empty-session restart loss and declined MCP confirmations; both were
+fixed before the successful run. Only managed empty-form confirmations map to
+tool approvals; other elicitation forms remain unsupported and declined.

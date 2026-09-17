@@ -5,6 +5,7 @@ import * as v from 'valibot'
 
 import { parseEvent } from './ag-ui'
 import { RuntimeError } from './errors'
+import { ProjectResources } from './resources'
 import { SessionStore } from './store'
 import { JsonObjectSchema, parseInput } from './validation'
 
@@ -62,6 +63,7 @@ const ManagerOptionsSchema = v.strictObject({
     )
   ),
   memoryTimeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(120000)), 5000),
+  resources: v.optional(v.instance(ProjectResources)),
   runtimes: v.array(
     v.custom<RuntimeAdapter>((value) => {
       if (value === null || typeof value !== 'object') {
@@ -83,8 +85,10 @@ const ManagerOptionsSchema = v.strictObject({
  * Owns durable sessions, background runs, approvals, and registered runtime adapters.
  */
 export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
+  private readonly updating = new Map<string, Promise<void>>()
+  private readonly preparations = new Map<string, Promise<void>>()
   private readonly memoryTasks = new Set<Promise<void>>()
-  private readonly active = new Map<string, { done: Promise<void>; adapter: RuntimeAdapter }>()
+  private readonly active = new Map<string, { done: Promise<void>; adapter: RuntimeAdapter; projectId: string }>()
   private readonly controls = new Set<Promise<unknown>>()
   private readonly storageOperations = new Set<Promise<unknown>>()
   private stop!: () => void
@@ -103,7 +107,8 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     private readonly store: SessionStore,
     private readonly adapters: Map<string, RuntimeAdapter>,
     private readonly memory?: MemoryProvider,
-    private readonly memoryTimeoutMs = 5000
+    private readonly memoryTimeoutMs = 5000,
+    private readonly resources?: ProjectResources
   ) {}
 
   /**
@@ -123,7 +128,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     const store = await SessionStore.open(validated.dataDir)
     try {
       await store.recoverInterrupted()
-      return new RuntimeManager<A>(store, adapters, validated.memory, validated.memoryTimeoutMs)
+      return new RuntimeManager<A>(store, adapters, validated.memory, validated.memoryTimeoutMs, validated.resources)
     } catch (cause) {
       const error = new RuntimeError('STORAGE_ERROR', 'Failed to recover unfinished runs', { cause })
       try {
@@ -222,6 +227,8 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
         throw new RuntimeError('INVALID_INPUT', 'cwd must be an existing directory', { cause })
       }
       this.assertRunning()
+      this.assertProjectReady(validated.projectId)
+      await this.prepareProjectResources(validated.projectId, adapter)
       const native = await adapter.createSession({
         cwd,
         model: validated.model,
@@ -269,6 +276,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     return await this.control(async () => {
       const session = await this.storage(() => this.store.getSession(sessionId))
       this.assertRunning()
+      this.assertProjectReady(session.projectId)
       await this.getAdapter(session.runtime).resumeSession(this.nativeSession(session))
       return session
     })
@@ -311,6 +319,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       if (existing) {
         return { runId: existing.id, sessionId }
       }
+      this.assertProjectReady(session.projectId)
       const adapter = this.getAdapter(session.runtime)
       const runId = randomUUID()
       const run = await this.storage(() => this.store.beginRun(sessionId, runId, validated))
@@ -335,7 +344,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
           this.ready.delete(runId)
           this.cancellations.delete(runId)
         })
-      this.active.set(runId, { adapter, done: completion })
+      this.active.set(runId, { adapter, done: completion, projectId: session.projectId })
       return { runId, sessionId }
     })
   }
@@ -545,6 +554,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
         )
       )
     )
+    await attempt(() => this.bounded(this.resources?.dispose() ?? Promise.resolve(), 'Resource disposal'))
     this.stop()
     await attempt(() => this.bounded(Promise.all([...this.active.values()].map(({ done }) => done)), 'Run persistence'))
     await attempt(() => this.bounded(Promise.all(this.memoryTasks), 'Memory persistence'))
@@ -671,6 +681,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     let outcome: AdapterOutcome
     try {
       this.assertRunning()
+      await this.prepareProjectResources(session.projectId, adapter)
       const native = this.nativeSession(session)
       await Promise.race([adapter.resumeSession(native), this.stopped])
       this.assertRunning()
@@ -709,6 +720,65 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     if (!this.fatal) {
       await this.finishWithMemory(session, runId, input.text, outcome)
     }
+  }
+
+  private assertProjectReady = (projectId: string): void => {
+    if (this.updating.has(projectId)) {
+      throw new RuntimeError('RESOURCES_UPDATING', 'Project resources are updating')
+    }
+  }
+  private prepareProjectResources = (projectId: string, adapter: RuntimeAdapter): Promise<void> => {
+    const resources = this.resources
+    if (!resources) {
+      return Promise.resolve()
+    }
+    const key = `${projectId}:${adapter.kind}`
+    const existing = this.preparations.get(key)
+    if (existing) {
+      return existing
+    }
+    const pending = (async () => {
+      if (!adapter.configureProject) {
+        throw new RuntimeError('RESOURCE_PREPARATION_FAILED', 'Runtime does not support project resources')
+      }
+      try {
+        await adapter.configureProject(projectId, await resources.prepare(projectId))
+      } catch (error) {
+        throw new RuntimeError(
+          'RESOURCE_PREPARATION_FAILED',
+          error instanceof RuntimeError ? error.message : 'Enabled project resource unavailable'
+        )
+      }
+    })().finally(() => this.preparations.delete(key))
+    this.preparations.set(key, pending)
+    return pending
+  }
+
+  /** Stop project admission, drain current runs, apply changes, and rebuild the single project process. */
+  updateProjectResources = (projectId: string, change: () => Promise<void>): Promise<void> => {
+    this.assertOpen()
+    parseInput(NonBlankString, projectId)
+    this.assertProjectReady(projectId)
+    const accepted = [...this.controls]
+    const pending = (async () => {
+      await Promise.allSettled(accepted)
+      await this.storage(() => this.store.getProject(projectId))
+      await Promise.all([...this.active.values()].filter((run) => run.projectId === projectId).map((run) => run.done))
+      this.assertRunning()
+      await change()
+      await this.resources?.release(projectId)
+      for (const adapter of this.adapters.values()) {
+        if (adapter.configureProject) {
+          await this.prepareProjectResources(projectId, adapter)
+        }
+      }
+    })().finally(() => {
+      this.updating.delete(projectId)
+      this.controls.delete(pending)
+    })
+    this.updating.set(projectId, pending)
+    this.controls.add(pending)
+    return pending
   }
 
   private recallMemory = async (projectId: string, runId: string, text: string): Promise<string | undefined> => {

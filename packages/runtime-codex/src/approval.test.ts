@@ -323,3 +323,55 @@ describe('Codex approvals', () => {
     }
   })
 })
+
+test.each(['approve', 'deny'] as const)(
+  'routes managed MCP confirmations through durable approval: %s',
+  async (decision) => {
+    const p = await peer()
+    await p.runtime.configureProject('p', {
+      skillDirectories: [],
+      token: 'Bearer test',
+      url: 'http://127.0.0.1:4311/mcp'
+    })
+    const session = await p.create('native', 'p')
+    const received = Promise.withResolvers<void>()
+    const notices: AdapterNotice[] = []
+    const execution = p.runtime.execute(session, input, (notice) => {
+      notices.push(notice)
+      if (notice.kind === 'approval') {
+        received.resolve()
+      }
+      return Promise.resolve()
+    })
+    const start = await p.request('turn/start')
+    await p.send({ id: start.id, result: { turn: turn('turn') } })
+    await p.send({
+      id: 'tool',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        _meta: null,
+        message: 'Confirm tool',
+        mode: 'form',
+        requestedSchema: { properties: {}, type: 'object' },
+        serverName: 'project_resources',
+        threadId: 'native',
+        turnId: 'turn'
+      }
+    })
+    await received.promise
+    expect(notices.at(-1)).toMatchObject({ kind: 'approval', request: { kind: 'tool' } })
+    const responding = p.runtime.respondApproval('run', 'tool', decision)
+    expect(await p.request()).toEqual({
+      id: 'tool',
+      result: {
+        _meta: null,
+        action: decision === 'approve' ? 'accept' : 'decline',
+        content: decision === 'approve' ? {} : null
+      }
+    })
+    await p.send({ method: 'serverRequest/resolved', params: { requestId: 'tool', threadId: 'native' } })
+    await responding
+    await p.send(done())
+    expect(await execution).toEqual({ status: 'succeeded' })
+  }
+)

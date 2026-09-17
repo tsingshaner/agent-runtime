@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { chmod, copyFile, glob, link, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, join, relative, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 
 import {
   type AdapterNotice,
@@ -12,6 +12,7 @@ import {
   type Json,
   type JsonObject,
   type NativeSession,
+  type ResourceSnapshot,
   type RuntimeAdapter,
   RuntimeError
 } from '@qingshaner/runtime'
@@ -24,6 +25,8 @@ import {
   ApprovalResponseSchema,
   CommandApprovalSchema,
   DeclineElicitationSchema,
+  ElicitationApprovalSchema,
+  ElicitationResponseSchema,
   EmptyAnswersSchema,
   FileApprovalSchema,
   type Frame,
@@ -69,6 +72,7 @@ interface PendingResponse {
   confirmation?: PromiseWithResolvers<void>
 }
 interface PendingApproval extends PendingResponse {
+  elicitation?: boolean
   allowedDecisions: ApprovalDecision[]
 }
 interface ActiveRun {
@@ -141,7 +145,8 @@ export class CodexProcess implements RuntimeAdapter {
   constructor(
     options: CodexRuntimeOptions,
     private readonly userHome: string,
-    private readonly legacyHome: string
+    private readonly legacyHome: string,
+    private resources?: ResourceSnapshot
   ) {
     this.options = validate(OptionsSchema, options)
   }
@@ -304,7 +309,13 @@ export class CodexProcess implements RuntimeAdapter {
     void run.client
       .reply(
         nativeRequestId,
-        parseProtocol(ApprovalResponseSchema, { decision: decision === 'approve' ? 'accept' : 'decline' })
+        approval.elicitation
+          ? parseProtocol(ElicitationResponseSchema, {
+              _meta: null,
+              action: decision === 'approve' ? 'accept' : 'decline',
+              content: decision === 'approve' ? {} : null
+            })
+          : parseProtocol(ApprovalResponseSchema, { decision: decision === 'approve' ? 'accept' : 'decline' })
       )
       .catch(() => confirmation.reject(uncertain()))
     await result
@@ -356,6 +367,21 @@ export class CodexProcess implements RuntimeAdapter {
       throw new RuntimeError('DISPOSED', 'Codex runtime disposed')
     }
   }
+  updateResources = async (resources: ResourceSnapshot): Promise<void> => {
+    this.checkOpen()
+    if (this.runs.size > 0) {
+      throw new RuntimeError('RESOURCES_UPDATING', 'Project has active runs')
+    }
+    const home = this.options.codexHome
+    if (!home) {
+      throw new RuntimeError('RESOURCE_PREPARATION_FAILED', 'Missing project home')
+    }
+    await writeFile(join(home, 'config.toml'), resourceConfig(resources), { mode: 0o600 })
+    this.resources = resources
+    this.prepared.clear()
+    await (await this.start()).request('config/mcpServer/reload', {})
+  }
+
   private checkClient(client: JsonRpcClient): void {
     this.checkOpen()
     if (this.client !== client) {
@@ -445,22 +471,57 @@ export class CodexProcess implements RuntimeAdapter {
     }
   }
 
+  private checkResourceConfig = (servers: Record<string, unknown>): void => {
+    if (!this.resources) {
+      return
+    }
+    const actual = servers.project_resources
+    if (!actual || typeof actual !== 'object' || Array.isArray(actual)) {
+      throw new RuntimeError('RESOURCE_PREPARATION_FAILED', 'Managed MCP configuration missing')
+    }
+    const config = actual as Record<string, unknown>
+    const allowed = ['url', 'http_headers', 'enabled', 'required', 'environment_id', 'tool_timeout_sec']
+    if (
+      config.url !== this.resources.url ||
+      JSON.stringify(config.http_headers) !== JSON.stringify({ Authorization: this.resources.token }) ||
+      (config.environment_id != null && config.environment_id !== 'local') ||
+      Object.keys(config).some((key) => !allowed.includes(key))
+    ) {
+      throw new RuntimeError('RESOURCE_PREPARATION_FAILED', 'Project configuration overrides managed MCP')
+    }
+  }
+
   private async prepareResources(client: JsonRpcClient, cwd: string): Promise<JsonObject> {
     let pending = this.prepared.get(cwd)
     if (!pending) {
       pending = (async () => {
-        await client.request('skills/extraRoots/set', { extraRoots: [] })
+        const selected = new Set(
+          (this.resources?.skillDirectories ?? []).map((directory) => join(directory, 'SKILL.md'))
+        )
+        await client.request('skills/extraRoots/set', {
+          extraRoots: [...new Set((this.resources?.skillDirectories ?? []).map(dirname))]
+        })
         const schema = v.object({
           data: v.array(v.object({ skills: v.array(v.object({ enabled: v.boolean(), path: v.string() })) }))
         })
         const inventory = parseProtocol(schema, await client.request('skills/list', { cwds: [cwd], forceReload: true }))
         for (const skill of inventory.data.flatMap((entry) => entry.skills)) {
-          if (skill.enabled) {
-            await client.request('skills/config/write', { enabled: false, name: null, path: skill.path })
+          if (skill.enabled !== selected.has(skill.path)) {
+            await client.request('skills/config/write', {
+              enabled: selected.has(skill.path),
+              name: null,
+              path: skill.path
+            })
           }
         }
         const checked = parseProtocol(schema, await client.request('skills/list', { cwds: [cwd], forceReload: true }))
-        if (checked.data.some((entry) => entry.skills.some((skill) => skill.enabled))) {
+        const enabled = new Set(
+          checked.data
+            .flatMap((entry) => entry.skills)
+            .filter((skill) => skill.enabled)
+            .map((skill) => skill.path)
+        )
+        if (enabled.size !== selected.size || [...enabled].some((path) => !selected.has(path))) {
           throw new RuntimeError('RESOURCE_PREPARATION_FAILED', 'Unbound skills remain enabled')
         }
         const settings = parseProtocol(
@@ -472,12 +533,16 @@ export class CodexProcess implements RuntimeAdapter {
           }),
           await client.request('config/read', { cwd, includeLayers: false })
         )
+        this.checkResourceConfig(settings.config.mcp_servers)
         this.checkClient(client)
         return {
           features: { apps: false },
           // biome-ignore lint/style/useNamingConvention: Native configuration key.
           mcp_servers: Object.fromEntries(
-            Object.keys(settings.config.mcp_servers).map((name) => [name, { enabled: false }])
+            Object.keys(settings.config.mcp_servers).map((name) => [
+              name,
+              { enabled: !!this.resources && name === 'project_resources' }
+            ])
           )
         }
       })()
@@ -655,6 +720,9 @@ export class CodexProcess implements RuntimeAdapter {
         this.requestInput(client, frame)
         return
       case 'mcpServer/elicitation/request':
+        if (this.requestToolApproval(client, frame)) {
+          return
+        }
         result = parseProtocol(DeclineElicitationSchema, { _meta: null, action: 'decline', content: null })
         break
       case 'item/permissions/requestApproval':
@@ -692,6 +760,48 @@ export class CodexProcess implements RuntimeAdapter {
       frame,
       responseAttempted: approval.responding
     })
+  }
+
+  private requestToolApproval = (client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): boolean => {
+    if (!this.resources) {
+      return false
+    }
+    const parsed = v.safeParse(ElicitationApprovalSchema, frame.params)
+    if (!parsed.success) {
+      return false
+    }
+    const params = parsed.output
+    const run = this.threads.get(params.threadId)
+    if (
+      !run ||
+      run.client !== client ||
+      run.finished ||
+      run.nativeEnded ||
+      !params.turnId ||
+      (run.turnId && run.turnId !== params.turnId)
+    ) {
+      return false
+    }
+    if (run.approvals.has(frame.id) || run.inputs.has(frame.id)) {
+      this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native approval request'))
+      return true
+    }
+    this.bind(run, params.turnId)
+    const allowedDecisions: ApprovalDecision[] = ['approve', 'deny']
+    run.approvals.set(frame.id, { allowedDecisions, elicitation: true, resolved: false, responding: false })
+    this.enqueue(run, {
+      bytes: Buffer.byteLength(JSON.stringify(frame)),
+      notice: {
+        kind: 'approval',
+        request: {
+          allowedDecisions,
+          detail: { message: params.message, serverName: params.serverName },
+          kind: 'tool',
+          nativeRequestId: frame.id
+        }
+      }
+    })
+    return true
   }
 
   private requestApproval(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
@@ -943,3 +1053,6 @@ export class CodexProcess implements RuntimeAdapter {
 
 /** Validate runtime configuration without creating files or processes. */
 export const parseRuntimeOptions = (options: CodexRuntimeOptions) => validate(OptionsSchema, options)
+
+export const resourceConfig = (resources?: ResourceSnapshot): string =>
+  `[features]\napps = false\n${resources ? `\n[mcp_servers.project_resources]\nrequired = true\nurl = ${JSON.stringify(resources.url)}\n[mcp_servers.project_resources.http_headers]\nAuthorization = ${JSON.stringify(resources.token)}\n` : ''}`

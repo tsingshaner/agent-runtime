@@ -10,6 +10,7 @@ import type { FileChangeRequestApprovalParams } from './schemas/v2/FileChangeReq
 import type { FileChangeRequestApprovalResponse } from './schemas/v2/FileChangeRequestApprovalResponse'
 import type { ItemCompletedNotification } from './schemas/v2/ItemCompletedNotification'
 import type { ItemStartedNotification } from './schemas/v2/ItemStartedNotification'
+import type { McpServerElicitationRequestParams } from './schemas/v2/McpServerElicitationRequestParams'
 import type { McpServerElicitationRequestResponse } from './schemas/v2/McpServerElicitationRequestResponse'
 import type { PermissionsRequestApprovalResponse } from './schemas/v2/PermissionsRequestApprovalResponse'
 import type { ServerRequestResolvedNotification } from './schemas/v2/ServerRequestResolvedNotification'
@@ -322,3 +323,24 @@ export const parseResult = (method: string, value: Json): Json => {
       return value
   }
 }
+
+export const ElicitationApprovalSchema = v.object({
+  message: v.string(),
+  mode: v.picklist(['form', 'openai/form', 'openaiForm']),
+  requestedSchema: v.object({
+    properties: v.strictObject({}),
+    required: v.optional(v.pipe(v.array(v.string()), v.maxLength(0))),
+    type: v.literal('object')
+  }),
+  serverName: v.literal('project_resources'),
+  threadId: v.string(),
+  turnId: v.nullable(v.string())
+}) satisfies v.GenericSchema<
+  unknown,
+  Pick<McpServerElicitationRequestParams, 'threadId' | 'turnId' | 'serverName' | 'mode' | 'message'>
+>
+export const ElicitationResponseSchema = v.strictObject({
+  _meta: v.null(),
+  action: v.picklist(['accept', 'decline']),
+  content: v.nullable(v.strictObject({}))
+}) satisfies v.GenericSchema<unknown, McpServerElicitationRequestResponse>

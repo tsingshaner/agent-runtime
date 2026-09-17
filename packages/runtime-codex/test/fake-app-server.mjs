@@ -16,10 +16,21 @@ if (process.argv.includes('--exit-on-request')) {
   const statePath = stateIndex < 0 ? undefined : join(process.argv[stateIndex + 1], 'threads.json')
   const threads = new Set(statePath && existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : [])
   const starts = new Set()
+  let configOverride
+
   input.on('line', (line) => {
     const frame = JSON.parse(line)
     if (frame.method === 'config/read') {
-      process.stdout.write(`${JSON.stringify({ id: frame.id, result: { config: { mcp_servers: {} } } })}\n`)
+      const text = readFileSync(join(process.env.CODEX_HOME, 'config.toml'), 'utf8')
+      const url = /^url = (.+)$/m.exec(text)?.[1]
+      const token = /^Authorization = (.+)$/m.exec(text)?.[1]
+      const config = configOverride ?? {
+        mcp_servers:
+          url && token
+            ? { project_resources: { http_headers: { Authorization: JSON.parse(token) }, url: JSON.parse(url) } }
+            : {}
+      }
+      process.stdout.write(`${JSON.stringify({ id: frame.id, result: { config } })}\n`)
       return
     }
     if (
@@ -53,6 +64,10 @@ if (process.argv.includes('--exit-on-request')) {
     const command = JSON.parse(line)
     const ack = () => send({ event: 'ack' })
     switch (command.action) {
+      case 'config':
+        configOverride = command.config
+        ack()
+        break
       case 'send':
         if (statePath && starts.delete(command.frame.id) && command.frame.result?.thread?.id) {
           threads.add(command.frame.result.thread.id)

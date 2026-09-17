@@ -429,3 +429,7 @@ const validateOptions = (options: MemoryCoreOptions): void => {
     invalid()
   }
 }
+
+export { MemoryError, ProjectMemory } from './project'
+
+export type { MemoryConversation, MemoryReceipt, ProjectMemoryOptions } from './project'

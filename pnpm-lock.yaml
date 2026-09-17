@@ -314,7 +314,14 @@ importers:
         specifier: 1.5.0
         version: 1.5.0(typescript@7.0.2)
 
-  packages/memory: {}
+  packages/memory:
+    dependencies:
+      '@tencentdb-agent-memory/memory-sdk-ts-v2':
+        specifier: 1.0.1-beta.1
+        version: 1.0.1-beta.1
+      valibot:
+        specifier: 1.5.0
+        version: 1.5.0(typescript@7.0.2)
 
   packages/runtime:
     dependencies:

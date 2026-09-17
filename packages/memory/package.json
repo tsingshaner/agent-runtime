@@ -22,5 +22,9 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1",
+    "valibot": "1.5.0"
   }
 }

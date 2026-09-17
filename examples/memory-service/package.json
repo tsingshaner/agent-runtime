@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "smoke": "pnpm --workspace-root build && node --env-file-if-exists=../../.env.local main.ts"
+    "smoke": "pnpm --workspace-root build && node --env-file-if-exists=../../.env.local main.ts",
+    "smoke:project": "pnpm --workspace-root build && node --env-file-if-exists=../../.env.local project-smoke.ts"
   },
   "dependencies": {
     "@qingshaner/memory": "workspace:*",

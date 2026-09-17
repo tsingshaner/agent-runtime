@@ -31,7 +31,8 @@ export default defineConfig(
         'es-toolkit',
         'valibot',
         'yaml',
-        /^@modelcontextprotocol\/sdk/
+        /^@modelcontextprotocol\/sdk/,
+        '@tencentdb-agent-memory/memory-sdk-ts-v2'
       ]
     },
     dts: {

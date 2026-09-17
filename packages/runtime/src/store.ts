@@ -15,7 +15,7 @@ import { parseEvent, startedEvent, type TerminalOutcome, terminalEvent } from '.
 import { RuntimeError } from './errors'
 import { acquireDirectoryLock, type DirectoryLock } from './lock'
 import * as schema from './schema'
-import { approvals, events, inputRequests, projects, runs, sessions } from './schema'
+import { approvalBatches, approvals, events, inputRequests, projects, runs, sessions } from './schema'
 import { subscribeToRun } from './subscription'
 import {
   ArchivedSchema,
@@ -34,6 +34,7 @@ import type {
   AdapterNotice,
   AgUiEvent,
   Approval,
+  ApprovalBatchDecision,
   ApprovalDecision,
   EventEnvelope,
   InputAnswers,
@@ -51,7 +52,7 @@ const DecisionSchema = v.picklist(['approve', 'deny'])
 const ApprovalRequestSchema = v.strictObject({
   allowedDecisions: v.pipe(v.array(DecisionSchema), v.minLength(1)),
   detail: JsonObjectSchema,
-  kind: v.picklist(['command', 'file-change']),
+  kind: v.picklist(['command', 'file-change', 'tool']),
   nativeRequestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())])
 })
 const InputRequestSchema = v.strictObject({
@@ -144,6 +145,36 @@ const findRequestedRun = async (
   return toRun(row)
 }
 
+const claimReadyBatch = async (
+  tx: Transaction,
+  batchId: string
+): Promise<{ nativeRequestId: string | number; decisions: ApprovalBatchDecision[] } | undefined> => {
+  const members = await tx
+    .select()
+    .from(approvals)
+    .where(eq(approvals.batchId, batchId))
+    .orderBy(asc(approvals.batchIndex))
+  if (members.some((member) => member.status !== 'decided')) {
+    return undefined
+  }
+  const [batch] = await tx
+    .update(approvalBatches)
+    .set({ status: 'responding' })
+    .where(and(eq(approvalBatches.id, batchId), eq(approvalBatches.status, 'pending')))
+    .returning()
+  if (!batch) {
+    return undefined
+  }
+  await tx.update(approvals).set({ status: 'responding' }).where(eq(approvals.batchId, batch.id))
+  return {
+    decisions: members.map((member) => ({
+      decision: member.decision as ApprovalDecision,
+      nativeRequestId: member.nativeRequestId
+    })),
+    nativeRequestId: batch.nativeRequestId
+  }
+}
+
 const refreshWaiting = async (tx: Transaction, runId: string): Promise<void> => {
   const [input] = await tx
     .select({ id: inputRequests.id })
@@ -153,7 +184,7 @@ const refreshWaiting = async (tx: Transaction, runId: string): Promise<void> => 
   const [approval] = await tx
     .select({ id: approvals.id })
     .from(approvals)
-    .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'responding'])))
+    .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'decided', 'responding'])))
     .limit(1)
   await tx
     .update(runs)
@@ -575,7 +606,7 @@ export class SessionStore {
       const expired = await tx
         .update(approvals)
         .set({ status: 'expired' })
-        .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'responding'])))
+        .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'decided', 'responding'])))
         .returning()
       for (const approval of expired) {
         await persistEvent(
@@ -588,6 +619,10 @@ export class SessionStore {
           })
         )
       }
+      await tx
+        .update(approvalBatches)
+        .set({ status: 'expired' })
+        .where(and(eq(approvalBatches.runId, runId), inArray(approvalBatches.status, ['pending', 'responding'])))
       const expiredInputs = await tx
         .update(inputRequests)
         .set({ status: 'expired' })
@@ -628,7 +663,13 @@ export class SessionStore {
       const [existing] = await tx
         .select()
         .from(approvals)
-        .where(and(eq(approvals.runId, runId), eq(approvals.nativeRequestId, validated.nativeRequestId)))
+        .where(
+          and(
+            sql`${approvals.batchId} is null`,
+            eq(approvals.runId, runId),
+            eq(approvals.nativeRequestId, validated.nativeRequestId)
+          )
+        )
       if (existing) {
         return existing
       }
@@ -655,7 +696,13 @@ export class SessionStore {
   /**
    * Atomically claim a pending approval before the native response is attempted.
    */
-  async claimApproval(runId: string, approvalId: string, decision: ApprovalDecision): Promise<Approval> {
+  async claimApproval(
+    runId: string,
+    approvalId: string,
+    decision: ApprovalDecision
+  ): Promise<
+    Approval & { batchSubmission?: { nativeRequestId: string | number; decisions: ApprovalBatchDecision[] } }
+  > {
     parseInput(SessionIdSchema, runId)
     parseInput(SessionIdSchema, approvalId)
     parseInput(DecisionSchema, decision)
@@ -673,13 +720,14 @@ export class SessionStore {
       }
       const [claimed] = await tx
         .update(approvals)
-        .set({ decision, status: 'responding' })
+        .set({ decision, status: approval.batchId ? 'decided' : 'responding' })
         .where(and(condition, eq(approvals.status, 'pending')))
         .returning()
       if (!claimed) {
         throw new RuntimeError('APPROVAL_NOT_PENDING', 'Approval is not pending')
       }
-      return claimed
+      const batchSubmission = claimed.batchId ? await claimReadyBatch(tx, claimed.batchId) : undefined
+      return { ...claimed, ...(batchSubmission ? { batchSubmission, status: 'responding' as const } : {}) }
     })
   }
 
@@ -700,9 +748,10 @@ export class SessionStore {
         })
         .where(
           and(
+            sql`${approvals.batchId} is null`,
             eq(approvals.runId, runId),
             eq(approvals.nativeRequestId, nativeRequestId),
-            inArray(approvals.status, ['pending', 'responding'])
+            inArray(approvals.status, ['pending', 'decided', 'responding'])
           )
         )
         .returning()
@@ -718,6 +767,101 @@ export class SessionStore {
           value: { approvalId: approval.id, decision: approval.decision, status: approval.status }
         })
       )
+      await refreshWaiting(tx, runId)
+    })
+    this.notifyRunChange(runId)
+  }
+
+  async requestApprovalBatch(
+    runId: string,
+    request: Extract<AdapterNotice, { kind: 'approval-batch' }>['request']
+  ): Promise<void> {
+    const value = parseInput(
+      v.strictObject({
+        nativeRequestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())]),
+        requests: v.pipe(
+          v.array(ApprovalRequestSchema),
+          v.minLength(1),
+          v.check((items) => new Set(items.map((item) => JSON.stringify(item.nativeRequestId))).size === items.length)
+        )
+      }),
+      request
+    )
+    await this.db.transaction(async (tx) => {
+      const run = await requireRun(tx, runId)
+      if (!activeStatuses.some((status) => status === run.status)) {
+        throw new RuntimeError('RUN_TERMINAL', 'Run is terminal')
+      }
+      const [batch] = await tx
+        .insert(approvalBatches)
+        .values({ id: randomUUID(), nativeRequestId: value.nativeRequestId, runId, status: 'pending' })
+        .onConflictDoNothing()
+        .returning()
+      if (!batch) {
+        return
+      }
+      for (const [batchIndex, item] of value.requests.entries()) {
+        const [row] = await tx
+          .insert(approvals)
+          .values({ ...item, batchId: batch.id, batchIndex, id: randomUUID(), runId, status: 'pending' })
+          .returning()
+        if (!row) {
+          throw new Error('Approval insert returned no row')
+        }
+        const { nativeRequestId: _nativeRequestId, ...publicApproval } = row
+        await persistEvent(
+          tx,
+          runId,
+          parseEvent({ name: 'runtime.approval.requested', type: EventType.CUSTOM, value: publicApproval })
+        )
+      }
+      await refreshWaiting(tx, runId)
+    })
+    this.notifyRunChange(runId)
+  }
+
+  async resolveApprovalBatch(
+    runId: string,
+    nativeRequestId: string | number,
+    responseAttempted?: boolean
+  ): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await requireRun(tx, runId)
+      const [batch] = await tx
+        .update(approvalBatches)
+        .set({
+          status:
+            responseAttempted === false
+              ? 'expired'
+              : sql`case when ${approvalBatches.status} = 'responding' then 'resolved' else 'expired' end`
+        })
+        .where(
+          and(
+            eq(approvalBatches.runId, runId),
+            eq(approvalBatches.nativeRequestId, nativeRequestId),
+            inArray(approvalBatches.status, ['pending', 'responding'])
+          )
+        )
+        .returning()
+      if (!batch) {
+        return
+      }
+      const members = await tx
+        .update(approvals)
+        .set({ status: batch.status, ...(responseAttempted === false ? { decision: null } : {}) })
+        .where(eq(approvals.batchId, batch.id))
+        .returning()
+      for (const member of members.sort((a, b) => (a.batchIndex ?? 0) - (b.batchIndex ?? 0))) {
+        await persistEvent(
+          tx,
+          runId,
+          parseEvent({
+            name: 'runtime.approval.resolved',
+            type: EventType.CUSTOM,
+            value: { approvalId: member.id, decision: member.decision, status: member.status }
+          })
+        )
+      }
       await refreshWaiting(tx, runId)
     })
     this.notifyRunChange(runId)
@@ -838,7 +982,7 @@ export class SessionStore {
     return this.db
       .select()
       .from(approvals)
-      .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'responding'])))
+      .where(and(eq(approvals.runId, runId), inArray(approvals.status, ['pending', 'decided', 'responding'])))
       .orderBy(asc(approvals.id))
   }
 

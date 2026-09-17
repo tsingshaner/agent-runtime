@@ -19,7 +19,7 @@ describe('SessionStore sessions', () => {
 
   beforeEach(async () => {
     // Keep migrations and the database instance; reset all related rows together.
-    await store.db.execute(sql`TRUNCATE TABLE input_requests, approvals, events, runs, sessions`)
+    await store.db.execute(sql`TRUNCATE TABLE input_requests, approvals, approval_batches, events, runs, sessions`)
   })
 
   afterAll(async () => {

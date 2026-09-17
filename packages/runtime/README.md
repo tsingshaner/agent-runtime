@@ -67,3 +67,7 @@ SDK 示例可同时设置 SESSION_ID 和 REQUEST_ID 重试同一请求。
 `listPendingInputs(runId)` 查询补充问题，`respondInput(runId, inputId, answers)` 按问题 ID 提供字符串数组。
 InputEvent 的 runtime.input.requested / runtime.input.resolved 扩展在持久化后发布；waiting_input 仍占用会话。
 回答待原生确认，发送结果不确定时保留 responding 且拒绝重发；终态与重启将旧请求过期。SDK 示例在终端交互回答，无终端时取消等待输入的运行。
+
+批量审批仍使用 `listPendingApprovals` / `respondApproval`：batchId 和 batchIndex 标明成员与原生顺序。
+部分决定为 decided，收齐后全批进入 responding 并仅提交一次；原生确认前不标 resolved。
+工具审批使用 tool 种类；批次取消或重启后过期，结果不确定不自动重发。适配器提供 respondApprovalBatch 并在确认后发送 approval-batch-resolved。

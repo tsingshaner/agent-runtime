@@ -96,14 +96,32 @@ export const events = pgTable(
   ]
 )
 
+export const approvalBatches = pgTable(
+  'approval_batches',
+  {
+    id: text().primaryKey(),
+    nativeRequestId: jsonb('native_request_id').$type<string | number>().notNull(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id),
+    status: text().$type<'pending' | 'responding' | 'resolved' | 'expired'>().notNull()
+  },
+  (table) => [
+    unique().on(table.runId, table.nativeRequestId),
+    check('batch_status_check', sql`${table.status} in ('pending', 'responding', 'resolved', 'expired')`)
+  ]
+)
+
 export const approvals = pgTable(
   'approvals',
   {
     allowedDecisions: jsonb('allowed_decisions').$type<ApprovalDecision[]>().notNull(),
+    batchId: text('batch_id').references(() => approvalBatches.id),
+    batchIndex: integer('batch_index'),
     decision: text().$type<ApprovalDecision>(),
     detail: jsonb().$type<JsonObject>().notNull(),
     id: text().primaryKey(),
-    kind: text().$type<'command' | 'file-change'>().notNull(),
+    kind: text().$type<'command' | 'file-change' | 'tool'>().notNull(),
     nativeRequestId: jsonb('native_request_id').$type<string | number>().notNull(),
     runId: text('run_id')
       .notNull()
@@ -111,10 +129,15 @@ export const approvals = pgTable(
     status: text().$type<ApprovalStatus>().notNull()
   },
   (table) => [
-    check('approvals_kind_check', sql`${table.kind} in ('command', 'file-change')`),
-    check('approvals_status_check', sql`${table.status} in ('pending', 'responding', 'resolved', 'expired')`),
+    check('approvals_kind_check', sql`${table.kind} in ('command', 'file-change', 'tool')`),
+    check(
+      'approvals_status_check',
+      sql`${table.status} in ('pending', 'decided', 'responding', 'resolved', 'expired')`
+    ),
     check('approvals_decision_check', sql`${table.decision} in ('approve', 'deny')`),
-    unique().on(table.runId, table.nativeRequestId)
+    uniqueIndex('single_approval_request').on(table.runId, table.nativeRequestId).where(sql`${table.batchId} is null`),
+    unique().on(table.batchId, table.nativeRequestId),
+    unique().on(table.batchId, table.batchIndex)
   ]
 )
 

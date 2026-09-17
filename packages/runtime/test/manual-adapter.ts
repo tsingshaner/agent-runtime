@@ -5,6 +5,7 @@ import { RuntimeError } from '../src/errors'
 import type {
   AdapterNotice,
   AdapterOutcome,
+  ApprovalBatchDecision,
   ApprovalDecision,
   InputAnswers,
   JsonObject,
@@ -16,6 +17,8 @@ export class ManualAdapter implements RuntimeAdapter {
   readonly kind = 'manual'
   readonly answers: { runId: string; nativeRequestId: string | number; answers: InputAnswers }[] = []
   inputError?: Error
+  readonly batches: { runId: string; nativeRequestId: string | number; decisions: ApprovalBatchDecision[] }[] = []
+  batchError?: Error
   readonly created: NativeSession[] = []
   readonly resumed: NativeSession[] = []
   readonly cancelled: string[] = []
@@ -147,6 +150,18 @@ export class ManualAdapter implements RuntimeAdapter {
     if (this.confirmApprovals) {
       await this.push(runId, { kind: 'approval-resolved', nativeRequestId })
     }
+  }
+
+  async respondApprovalBatch(
+    runId: string,
+    nativeRequestId: string | number,
+    decisions: ApprovalBatchDecision[]
+  ): Promise<void> {
+    this.batches.push({ decisions, nativeRequestId, runId })
+    if (this.batchError) {
+      throw this.batchError
+    }
+    await this.push(runId, { kind: 'approval-batch-resolved', nativeRequestId })
   }
 
   async respondInput(runId: string, nativeRequestId: string | number, answers: InputAnswers): Promise<void> {

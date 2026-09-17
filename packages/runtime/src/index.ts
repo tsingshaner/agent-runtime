@@ -8,6 +8,7 @@ export type {
   AdapterOutcome,
   AgUiEvent,
   Approval,
+  ApprovalBatchDecision,
   ApprovalDecision,
   ApprovalStatus,
   CreateProjectInput,

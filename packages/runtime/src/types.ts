@@ -33,7 +33,7 @@ export type RunStatus =
 /**
  * Approval lifecycle; responding means a decision was claimed but is not yet confirmed.
  */
-export type ApprovalStatus = 'pending' | 'responding' | 'resolved' | 'expired'
+export type ApprovalStatus = 'decided' | 'pending' | 'responding' | 'resolved' | 'expired'
 /**
  * Serializable error code and message stored with a run.
  */
@@ -129,7 +129,9 @@ export interface Approval {
   id: string
   runId: string
   nativeRequestId: string | number
-  kind: 'command' | 'file-change'
+  kind: 'command' | 'file-change' | 'tool'
+  batchId: string | null
+  batchIndex: number | null
   detail: JsonObject
   allowedDecisions: ApprovalDecision[]
   status: ApprovalStatus
@@ -167,14 +169,23 @@ export type InputEvent =
 /**
  * Adapter notifications consumed in order by the manager for durable persistence.
  */
+export type ApprovalBatchDecision = { nativeRequestId: string | number; decision: ApprovalDecision }
 export type AdapterNotice =
+  | {
+      kind: 'approval-batch'
+      request: {
+        nativeRequestId: string | number
+        requests: Omit<Approval, 'id' | 'runId' | 'status' | 'decision' | 'batchId' | 'batchIndex'>[]
+      }
+    }
+  | { kind: 'approval-batch-resolved'; nativeRequestId: string | number; responseAttempted?: boolean }
   | { kind: 'input'; request: Pick<InputRequest, 'nativeRequestId' | 'questions'> }
   | { kind: 'input-resolved'; nativeRequestId: string | number; responseAttempted?: boolean }
   | { kind: 'started'; nativeTurnId: string }
   | { kind: 'event'; event: AgUiEvent }
   | {
       kind: 'approval'
-      request: Omit<Approval, 'id' | 'runId' | 'status' | 'decision'>
+      request: Omit<Approval, 'id' | 'runId' | 'status' | 'decision' | 'batchId' | 'batchIndex'>
     }
   | {
       kind: 'approval-resolved'
@@ -249,6 +260,12 @@ export interface RuntimeAdapter {
    */
   /** Answer a native input request; adapters must emit input-resolved after confirmation. */
   respondInput?(runId: string, nativeRequestId: string | number, answers: InputAnswers): Promise<void>
+  /** Submit one fully decided native batch in its original order. */
+  respondApprovalBatch?(
+    runId: string,
+    nativeRequestId: string | number,
+    decisions: ApprovalBatchDecision[]
+  ): Promise<void>
   respondApproval(runId: string, nativeRequestId: string | number, decision: ApprovalDecision): Promise<void>
   /**
    * Release all resources owned by this adapter; repeated calls must be safe.

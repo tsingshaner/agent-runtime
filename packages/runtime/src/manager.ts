@@ -414,7 +414,20 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       const approval = await this.storage(() => this.store.claimApproval(runId, approvalId, decision))
       this.assertRunning()
       try {
-        await adapter.respondApproval(runId, approval.nativeRequestId, decision)
+        if (approval.batchId) {
+          if (approval.batchSubmission) {
+            if (!adapter.respondApprovalBatch) {
+              throw new RuntimeError('UNSUPPORTED_APPROVAL', 'Runtime cannot respond to batches')
+            }
+            await adapter.respondApprovalBatch(
+              runId,
+              approval.batchSubmission.nativeRequestId,
+              approval.batchSubmission.decisions
+            )
+          }
+        } else {
+          await adapter.respondApproval(runId, approval.nativeRequestId, decision)
+        }
       } catch (cause) {
         throw new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Approval response was not confirmed', { cause })
       }
@@ -646,9 +659,15 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       const native = this.nativeSession(session)
       await Promise.race([adapter.resumeSession(native), this.stopped])
       this.assertRunning()
-      const execution = adapter.execute(native, { ...input, runId, sessionId: session.id }, (notice) =>
-        this.receive(runId, notice)
-      )
+      const execution = adapter.execute(native, { ...input, runId, sessionId: session.id }, (notice) => {
+        if (notice.kind === 'approval-batch' && !adapter.respondApprovalBatch) {
+          throw new RuntimeError('UNSUPPORTED_APPROVAL', 'Runtime cannot respond to batches')
+        }
+        if (notice.kind === 'input' && !adapter.respondInput) {
+          throw new RuntimeError('UNSUPPORTED_INPUT', 'Runtime cannot respond to input')
+        }
+        return this.receive(runId, notice)
+      })
       ready()
       outcome = await Promise.race([
         execution,
@@ -673,6 +692,14 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
 
   private async receive(runId: string, notice: AdapterNotice): Promise<void> {
     switch (notice.kind) {
+      case 'approval-batch':
+        await this.storage(() => this.store.requestApprovalBatch(runId, notice.request))
+        return
+      case 'approval-batch-resolved':
+        await this.storage(() =>
+          this.store.resolveApprovalBatch(runId, notice.nativeRequestId, notice.responseAttempted)
+        )
+        return
       case 'input':
         await this.storage(() => this.store.requestInput(runId, notice.request))
         return

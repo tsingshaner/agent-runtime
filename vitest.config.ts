@@ -36,27 +36,47 @@ export default defineConfig(async () => {
         exclude: ['packages/runtime-codex/src/schemas/**', '**/*.test.ts'],
         include: ['packages/*/src/**/*.ts']
       },
-      fileParallelism: false,
-      projects: alias.map(({ find, replacement }) => ({
-        test: {
-          name: find,
-          ...configDefaults,
-          alias,
-          include: [
-            `${replacement}/**/*.{test,spec}.?(c|m)ts?(x)`,
-            `${dirname(replacement)}/test/**/*.test.ts`,
-            `${dirname(replacement)}/*.test.ts`
-          ],
-          root: ROOT,
-          typecheck: {
-            checker: 'tsc',
-            enabled: true,
-            ignoreSourceErrors: false,
-            only: false,
-            tsconfig: resolve(ROOT, 'tsconfig.build.json')
+      projects: alias.flatMap(({ find, replacement }) => {
+        const include = [
+          `${replacement}/**/*.{test,spec}.?(c|m)ts?(x)`,
+          `${dirname(replacement)}/test/**/*.test.ts`,
+          `${dirname(replacement)}/*.test.ts`
+        ]
+        const light =
+          find === '@qingshaner/runtime'
+            ? [`${replacement}/ag-ui/**/*.test.ts`, `${replacement}/lock.test.ts`]
+            : find === '@qingshaner/runtime-codex'
+              ? [`${replacement}/events.test.ts`]
+              : []
+        // Separate groups prevent database startup from competing with short native RPC deadlines.
+        const groupOrder = find === '@qingshaner/runtime' ? 1 : find === '@qingshaner/runtime-codex' ? 2 : 0
+        const groups = [
+          { exclude: [...configDefaults.exclude, ...light], groupOrder, include, name: find },
+          ...(light.length > 0
+            ? [{ exclude: configDefaults.exclude, groupOrder: 0, include: light, name: `${find}:light` }]
+            : [])
+        ]
+        return groups.map(({ exclude, groupOrder, include, name }) => ({
+          test: {
+            ...configDefaults,
+            alias,
+            exclude,
+            fileParallelism: groupOrder !== 2,
+            include,
+            maxWorkers: groupOrder === 0 ? 4 : groupOrder === 1 ? 2 : 1,
+            name,
+            root: ROOT,
+            sequence: { groupOrder },
+            typecheck: {
+              checker: 'tsc',
+              enabled: true,
+              ignoreSourceErrors: false,
+              only: false,
+              tsconfig: resolve(ROOT, 'tsconfig.build.json')
+            }
           }
-        }
-      }))
+        }))
+      })
     }
   }
 })

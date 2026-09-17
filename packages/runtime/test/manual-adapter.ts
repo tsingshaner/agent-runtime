@@ -30,6 +30,24 @@ export class ManualAdapter implements RuntimeAdapter {
   resumeGate?: Promise<void>
   private disposed = false
 
+  /** Reset observations and controls after all executions have completed. */
+  reset(): void {
+    if (this.active.size > 0 || this.disposed) {
+      throw new Error('Cannot reset an active or disposed adapter')
+    }
+    this.created.length = 0
+    this.resumed.length = 0
+    this.cancelled.length = 0
+    this.decisions.length = 0
+    this.executions.clear()
+    this.starts.clear()
+    this.cancelError = undefined
+    this.approvalError = undefined
+    this.resumeGate = undefined
+    this.finishOnCancel = true
+    this.confirmApprovals = true
+  }
+
   async createSession(input: { cwd: string; options?: JsonObject }): Promise<NativeSession> {
     const session = {
       cwd: await realpath(input.cwd),

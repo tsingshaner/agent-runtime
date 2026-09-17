@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { EventType } from '@ag-ui/core'
-import { eq } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { eq, sql } from 'drizzle-orm'
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import { approvals, events, runs } from './schema'
 import { SessionStore } from './store'
@@ -13,9 +13,14 @@ describe('SessionStore runs', () => {
   let dir: string
   let store: SessionStore
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'runtime-runs-'))
     store = await SessionStore.open(dir)
+  })
+
+  beforeEach(async () => {
+    // Keep migrations and the database instance; reset all related rows together.
+    await store.db.execute(sql`TRUNCATE TABLE approvals, events, runs, sessions`)
     await store.insertSession({
       cwd: '/workspace',
       id: 's1',
@@ -27,7 +32,7 @@ describe('SessionStore runs', () => {
     })
   })
 
-  afterEach(async () => {
+  afterAll(async () => {
     await store.close()
     await rm(dir, { force: true, recursive: true })
   })

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { sql } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import { runs, sessions } from './schema'
 import { SessionStore } from './store'
@@ -12,12 +12,17 @@ describe('SessionStore sessions', () => {
   let dir: string
   let store: SessionStore
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'runtime-sessions-'))
     store = await SessionStore.open(dir)
   })
 
-  afterEach(async () => {
+  beforeEach(async () => {
+    // Keep migrations and the database instance; reset all related rows together.
+    await store.db.execute(sql`TRUNCATE TABLE approvals, events, runs, sessions`)
+  })
+
+  afterAll(async () => {
     await store.close()
     await rm(dir, { force: true, recursive: true })
   })

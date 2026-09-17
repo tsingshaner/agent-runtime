@@ -3,12 +3,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { EventType } from '@ag-ui/core'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { sql } from 'drizzle-orm'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import { ManualAdapter } from '../test/manual-adapter'
 import { RuntimeError } from './errors'
+import { acquireDirectoryLock } from './lock'
 import { RuntimeManager } from './manager'
 
+import type { SessionStore } from './store'
 import type { EventEnvelope, JsonObject } from './types'
 
 const collect = async (events: AsyncIterable<EventEnvelope>): Promise<EventEnvelope[]> => {
@@ -19,20 +22,35 @@ const collect = async (events: AsyncIterable<EventEnvelope>): Promise<EventEnvel
   return result
 }
 
-describe('RuntimeManager', () => {
+describe('RuntimeManager operations', () => {
   let dir: string
   let adapter: ManualAdapter
   let manager: RuntimeManager
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'runtime-manager-'))
     adapter = new ManualAdapter()
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
   })
 
   afterEach(async () => {
-    await manager.dispose()
-    await rm(dir, { force: true, recursive: true })
+    // Test-only access: await the manager's final persistence and cleanup, not just the terminal event.
+    const active = Reflect.get(manager, 'active') as Map<string, { done: Promise<void> }>
+    const pending = [...active.values()].map(({ done }) => done)
+    await Promise.all([...active.keys()].map((runId) => manager.cancel(runId)))
+    await Promise.all(pending)
+    const store = Reflect.get(manager, 'store') as SessionStore
+    await store.db.execute(sql`TRUNCATE TABLE approvals, events, runs, sessions`)
+    adapter.reset()
+    await Promise.all(['alias', 'file.txt'].map((name) => rm(join(dir, name), { force: true })))
+  })
+
+  afterAll(async () => {
+    try {
+      await manager.dispose()
+    } finally {
+      await rm(dir, { force: true, recursive: true })
+    }
   })
 
   const create = () => manager.createSession({ cwd: dir, projectId: 'project', runtime: adapter.kind })
@@ -122,6 +140,78 @@ describe('RuntimeManager', () => {
     await collect(manager.subscribe(runId))
   })
 
+  test('rejects a native identifier rather than importing it', async () => {
+    const session = await create()
+    await expect(manager.resumeSession(session.nativeSessionId)).rejects.toMatchObject({ code: 'SESSION_NOT_FOUND' })
+    await expect(manager.run(session.nativeSessionId, { text: 'hello' })).rejects.toMatchObject({
+      code: 'SESSION_NOT_FOUND'
+    })
+    expect(adapter.resumed).toEqual([])
+  })
+
+  test('clears terminal events while retaining the run index', async () => {
+    const session = await create()
+    const { runId } = await manager.run(session.id, { text: 'hello' })
+    await adapter.waitStarted(runId)
+    adapter.finish(runId, { status: 'succeeded' })
+    await collect(manager.subscribe(runId))
+    await manager.clearRunEvents(runId)
+
+    expect((await manager.listRuns(session.id)).items).toMatchObject([
+      { eventsCleared: true, id: runId, status: 'succeeded' }
+    ])
+    await expect(collect(manager.subscribe(runId))).rejects.toMatchObject({ code: 'EVENTS_CLEARED' })
+  })
+
+  test.each(['', ' \n '])('rejects empty run text %j before reserving a run', async (text) => {
+    const session = await create()
+    await expect(manager.run(session.id, { text })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    expect((await manager.listRuns(session.id)).items).toEqual([])
+  })
+
+  test.each([
+    { projectId: '' },
+    { projectId: '   ' },
+    { title: 'x'.repeat(257) },
+    { options: { invalid: undefined } },
+    { extra: true }
+  ])('rejects invalid creation input %j before native creation', async (invalid) => {
+    await expect(
+      manager.createSession({ cwd: dir, projectId: 'project', runtime: adapter.kind, ...invalid } as never)
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    expect(adapter.created).toEqual([])
+  })
+
+  test('rejects a missing cwd or a regular file before native creation', async () => {
+    const file = join(dir, 'file.txt')
+    await writeFile(file, 'content')
+    for (const cwd of [file, join(dir, 'missing')]) {
+      await expect(manager.createSession({ cwd, projectId: 'project', runtime: adapter.kind })).rejects.toMatchObject({
+        code: 'INVALID_INPUT'
+      })
+    }
+    expect(adapter.created).toEqual([])
+  })
+})
+
+describe('RuntimeManager lifecycle', () => {
+  let dir: string
+  let adapter: ManualAdapter
+  let manager: RuntimeManager
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'runtime-manager-'))
+    adapter = new ManualAdapter()
+    manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+  })
+
+  afterEach(async () => {
+    await manager.dispose()
+    await rm(dir, { force: true, recursive: true })
+  })
+
+  const create = () => manager.createSession({ cwd: dir, projectId: 'project', runtime: adapter.kind })
+
   test('queries old sessions without their adapter and rejects execution', async () => {
     const session = await create()
     await manager.dispose()
@@ -132,15 +222,6 @@ describe('RuntimeManager', () => {
     await expect(manager.run(session.id, { text: 'hello' })).rejects.toMatchObject({ code: 'RUNTIME_UNAVAILABLE' })
     await expect(manager.resumeSession(session.id)).rejects.toMatchObject({ code: 'RUNTIME_UNAVAILABLE' })
     expect((await manager.listRuns(session.id)).items).toEqual([])
-  })
-
-  test('rejects a native identifier rather than importing it', async () => {
-    const session = await create()
-    await expect(manager.resumeSession(session.nativeSessionId)).rejects.toMatchObject({ code: 'SESSION_NOT_FOUND' })
-    await expect(manager.run(session.nativeSessionId, { text: 'hello' })).rejects.toMatchObject({
-      code: 'SESSION_NOT_FOUND'
-    })
-    expect(adapter.resumed).toEqual([])
   })
 
   test('does not return a public session when native creation succeeds but indexing fails', async () => {
@@ -207,20 +288,6 @@ describe('RuntimeManager', () => {
     expect(adapter.created).toHaveLength(1)
   })
 
-  test('clears terminal events while retaining the run index', async () => {
-    const session = await create()
-    const { runId } = await manager.run(session.id, { text: 'hello' })
-    await adapter.waitStarted(runId)
-    adapter.finish(runId, { status: 'succeeded' })
-    await collect(manager.subscribe(runId))
-    await manager.clearRunEvents(runId)
-
-    expect((await manager.listRuns(session.id)).items).toMatchObject([
-      { eventsCleared: true, id: runId, status: 'succeeded' }
-    ])
-    await expect(collect(manager.subscribe(runId))).rejects.toMatchObject({ code: 'EVENTS_CLEARED' })
-  })
-
   test('disposes once and persists active completion before releasing the data directory', async () => {
     const session = await create()
     const { runId } = await manager.run(session.id, { text: 'hello' })
@@ -233,43 +300,20 @@ describe('RuntimeManager', () => {
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [] })
     expect((await manager.getRun(runId)).status).toBe('cancelled')
   })
+})
 
-  test.each(['', ' \n '])('rejects empty run text %j before reserving a run', async (text) => {
-    const session = await create()
-    await expect(manager.run(session.id, { text })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
-    expect((await manager.listRuns(session.id)).items).toEqual([])
-  })
-
-  test.each([
-    { projectId: '' },
-    { projectId: '   ' },
-    { title: 'x'.repeat(257) },
-    { options: { invalid: undefined } },
-    { extra: true }
-  ])('rejects invalid creation input %j before native creation', async (invalid) => {
-    await expect(
-      manager.createSession({ cwd: dir, projectId: 'project', runtime: adapter.kind, ...invalid } as never)
-    ).rejects.toMatchObject({ code: 'INVALID_INPUT' })
-    expect(adapter.created).toEqual([])
-  })
-
-  test('rejects a missing cwd or a regular file before native creation', async () => {
-    const file = join(dir, 'file.txt')
-    await writeFile(file, 'content')
-    for (const cwd of [file, join(dir, 'missing')]) {
-      await expect(manager.createSession({ cwd, projectId: 'project', runtime: adapter.kind })).rejects.toMatchObject({
-        code: 'INVALID_INPUT'
-      })
-    }
-    expect(adapter.created).toEqual([])
-  })
-
+describe('RuntimeManager startup validation', () => {
   test('rejects duplicate adapter kinds before acquiring data directory ownership', async () => {
-    await manager.dispose()
-    await expect(RuntimeManager.open({ dataDir: dir, runtimes: [adapter, new ManualAdapter()] })).rejects.toMatchObject(
-      { code: 'INVALID_INPUT' }
-    )
-    manager = await RuntimeManager.open({ dataDir: dir, runtimes: [] })
+    const dir = await mkdtemp(join(tmpdir(), 'runtime-manager-validation-'))
+    try {
+      await expect(
+        RuntimeManager.open({ dataDir: dir, runtimes: [new ManualAdapter(), new ManualAdapter()] })
+      ).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+      const lock = await acquireDirectoryLock(dir)
+      await lock.release()
+    } finally {
+      await rm(dir, { force: true, recursive: true })
+    }
   })
 
   test.each(['', '  '])('rejects invalid data directory %j', async (dataDir) => {

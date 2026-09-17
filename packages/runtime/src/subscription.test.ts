@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { EventType } from '@ag-ui/core'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { sql } from 'drizzle-orm'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import { RuntimeError } from './errors'
 import { SessionStore } from './store'
@@ -15,9 +16,14 @@ describe('run subscriptions', () => {
   let dir: string
   let store: SessionStore
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'runtime-subscription-'))
     store = await SessionStore.open(dir)
+  })
+
+  beforeEach(async () => {
+    // Keep migrations and the database instance; reset all related rows together.
+    await store.db.execute(sql`TRUNCATE TABLE approvals, events, runs, sessions`)
     await store.insertSession({
       cwd: '/workspace',
       id: 's1',
@@ -29,7 +35,7 @@ describe('run subscriptions', () => {
     })
   })
 
-  afterEach(async () => {
+  afterAll(async () => {
     await store.close()
     await rm(dir, { force: true, recursive: true })
   })
@@ -236,6 +242,36 @@ describe('run subscriptions', () => {
     await Promise.all([holding, clearing, assertion])
   })
 
+  test('ends immediately for an already aborted signal', async () => {
+    const iterator = store.subscribe('missing', { signal: AbortSignal.abort() })[Symbol.asyncIterator]()
+
+    expect(await iterator.next()).toEqual({ done: true, value: undefined })
+  })
+})
+
+describe('run subscription lifecycle', () => {
+  let dir: string
+  let store: SessionStore
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'runtime-subscription-'))
+    store = await SessionStore.open(dir)
+    await store.insertSession({
+      cwd: '/workspace',
+      id: 's1',
+      nativeSessionId: 'n1',
+      options: {},
+      projectId: 'p1',
+      runtime: 'codex',
+      title: 'test'
+    })
+  })
+
+  afterEach(async () => {
+    await store.close()
+    await rm(dir, { force: true, recursive: true })
+  })
+
   test.each(['storage failure', 'disposal'] as const)(
     'rejects terminal completion when %s occurs during the final status read',
     async (action) => {
@@ -291,12 +327,6 @@ describe('run subscriptions', () => {
     expect((await iterator.next()).value?.sequence).toBe(1)
     await store.close()
     await expect(iterator.next()).rejects.toMatchObject({ code: 'DISPOSED' })
-  })
-
-  test('ends immediately for an already aborted signal', async () => {
-    const iterator = store.subscribe('missing', { signal: AbortSignal.abort() })[Symbol.asyncIterator]()
-
-    expect(await iterator.next()).toEqual({ done: true, value: undefined })
   })
 })
 

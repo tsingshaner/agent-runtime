@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { atomicWrite, FileError, readRegularFile } from '@internal/shared/files'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ErrorCode, McpError as ProtocolError } from '@modelcontextprotocol/sdk/types.js'
 import * as v from 'valibot'
 
@@ -15,15 +16,38 @@ export { FileError as McpError } from '@internal/shared/files'
 
 const nonempty = v.pipe(v.string(), v.minLength(1))
 const variable = v.pipe(v.string(), v.regex(/^[A-Za-z_][A-Za-z0-9_]*$/))
-const configSchema = v.strictObject({
-  args: v.optional(v.array(v.string()), []),
-  command: nonempty,
-  cwd: v.optional(nonempty),
-  env: v.optional(v.record(variable, variable), {}),
+const common = {
   name: v.pipe(nonempty, v.regex(/^[a-zA-Z0-9_-]+$/)),
-  timeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(10), v.maxValue(120000)), 10000),
-  transport: v.literal('stdio')
-})
+  timeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(10), v.maxValue(120000)), 10000)
+}
+const configSchema = v.variant('transport', [
+  v.strictObject({
+    ...common,
+    args: v.optional(v.array(v.string()), []),
+    command: nonempty,
+    cwd: v.optional(nonempty),
+    env: v.optional(v.record(variable, variable), {}),
+    transport: v.literal('stdio')
+  }),
+  v.strictObject({
+    ...common,
+    headers: v.optional(v.record(v.pipe(v.string(), v.regex(/^[A-Za-z0-9-]+$/)), variable), {}),
+    transport: v.literal('http'),
+    url: v.pipe(
+      v.string(),
+      v.check((value) => {
+        try {
+          const url = new URL(value)
+          return (
+            ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
+          )
+        } catch {
+          return false
+        }
+      })
+    )
+  })
+])
 export type McpConfig = v.InferInput<typeof configSchema>
 export type McpServer = v.InferOutput<typeof configSchema> & { id: string }
 export interface McpConnection {
@@ -69,6 +93,21 @@ const discover = async (client: Client, timeout: number): Promise<Tool[]> => {
     }
   } while (cursor)
   return tools
+}
+
+const waitForExit = async (pid: number | null): Promise<void> => {
+  if (pid === null) {
+    return
+  }
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return
+    }
+    await delay(10)
+  }
+  throw new FileError('MCP_CLOSE_FAILED', 'MCP child did not exit')
 }
 
 /** Persistent explicit project connections; no child is started until connect/probe. */
@@ -225,7 +264,10 @@ export class Mcp {
           )
         } catch (error) {
           await connection.close()
-          if (error instanceof ProtocolError && error.code === ErrorCode.RequestTimeout) {
+          if (
+            (error instanceof ProtocolError && error.code === ErrorCode.RequestTimeout) ||
+            (error instanceof Error && error.name === 'TimeoutError')
+          ) {
             throw new FileError('MCP_TIMEOUT', 'MCP request timed out')
           }
           throw new FileError('MCP_CALL_FAILED', 'MCP tool call failed')
@@ -245,8 +287,8 @@ export class Mcp {
     this.connections.add(connection)
     try {
       for (const config of configs) {
-        const env = getDefaultEnvironment()
-        for (const [target, source] of Object.entries(config.env)) {
+        const env: Record<string, string> = config.transport === 'stdio' ? getDefaultEnvironment() : {}
+        for (const [target, source] of Object.entries(config.transport === 'stdio' ? config.env : config.headers)) {
           const value = process.env[source]
           if (!value) {
             throw new FileError('MISSING_CREDENTIAL', 'MCP environment reference is unavailable')
@@ -254,35 +296,57 @@ export class Mcp {
           env[target] = value
           secrets.push(value)
         }
-        const transport = new StdioClientTransport({
-          args: config.args,
-          command: config.command,
-          cwd: config.cwd,
-          env,
-          stderr: 'ignore'
-        })
+        const transport =
+          config.transport === 'stdio'
+            ? new StdioClientTransport({
+                args: config.args,
+                command: config.command,
+                cwd: config.cwd,
+                env,
+                stderr: 'ignore'
+              })
+            : new StreamableHTTPClientTransport(new URL(config.url), {
+                fetch: (url, init) =>
+                  fetch(url, {
+                    ...init,
+                    redirect: 'error',
+                    signal: AbortSignal.any([
+                      ...(init?.signal ? [init.signal] : []),
+                      AbortSignal.timeout(config.timeoutMs)
+                    ])
+                  }),
+                reconnectionOptions: {
+                  initialReconnectionDelay: 1000,
+                  maxReconnectionDelay: 1000,
+                  maxRetries: 0,
+                  reconnectionDelayGrowFactor: 1
+                },
+                requestInit: { headers: env }
+              })
         const client = new Client({ name: 'agent-runtime', version: '0.0.0' })
         const nativeClose = transport.close.bind(transport)
         let stopped: Promise<void> | undefined
+        let cleanupFailed = false
         transport.close = () =>
           (stopped ??= (async () => {
-            const pid = transport.pid
-            await nativeClose()
-            if (pid !== null) {
-              for (let attempt = 0; attempt < 100; attempt++) {
-                try {
-                  process.kill(pid, 0)
-                } catch {
-                  return
-                }
-                await delay(10)
+            const pid = transport instanceof StdioClientTransport ? transport.pid : null
+            try {
+              if (transport instanceof StreamableHTTPClientTransport) {
+                await transport.terminateSession()
               }
-              throw new FileError('MCP_CLOSE_FAILED', 'MCP child did not exit')
+            } finally {
+              await nativeClose()
             }
-          })())
+            await waitForExit(pid)
+          })().catch(() => {
+            cleanupFailed = true
+          }))
         cleanup.push(async () => {
           await client.close()
           await transport.close()
+          if (cleanupFailed) {
+            throw new FileError('MCP_CLOSE_FAILED', 'MCP cleanup failed')
+          }
         })
         await client.connect(transport, { timeout: config.timeoutMs })
         for (const tool of await discover(client, config.timeoutMs)) {
@@ -302,7 +366,10 @@ export class Mcp {
       if (error instanceof FileError) {
         throw error
       }
-      if (error instanceof ProtocolError && error.code === ErrorCode.RequestTimeout) {
+      if (
+        (error instanceof ProtocolError && error.code === ErrorCode.RequestTimeout) ||
+        (error instanceof Error && error.name === 'TimeoutError')
+      ) {
         throw new FileError('MCP_TIMEOUT', 'MCP request timed out')
       }
       throw new FileError('MCP_CONNECT_FAILED', 'MCP connection failed')

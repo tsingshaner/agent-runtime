@@ -22,3 +22,11 @@ ordinary server tool results retain `isError`. Failed preparation closes every
 connection it opened. Configuration updates use atomic writes under a disk lock;
 competing writers fail RESOURCE_BUSY, and stale locks require inspection after a
 crash. No user-global MCP configuration is read or modified.
+
+Streamable HTTP uses `transport: 'http'`, `url`, and optional `headers`, whose
+values are environment variable names (e.g. Authorization -> MCP_AUTH_HEADER).
+URLs reject embedded credentials, query strings, and fragments. HTTP redirects
+are refused to avoid forwarding credentials. No OAuth flow is started. Fetches
+and RPCs are bounded, and automatic stream retries are disabled. Closing sends
+session DELETE when supported and always aborts local transport resources;
+remote termination failures are reported as MCP_CLOSE_FAILED.

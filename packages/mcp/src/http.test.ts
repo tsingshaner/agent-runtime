@@ -1,3 +1,4 @@
+// cspell:ignore onsessionclosed onsessioninitialized
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'

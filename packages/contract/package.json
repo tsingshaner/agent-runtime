@@ -1,0 +1,22 @@
+{
+  "name": "@qingshaner/runtime-contract",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "dependencies": {
+    "@orpc/contract": "2.0.0-beta.36",
+    "@orpc/openapi": "2.0.0-beta.36",
+    "@ag-ui/core": "0.0.59",
+    "valibot": "1.5.0",
+    "zod": "3.25.76"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

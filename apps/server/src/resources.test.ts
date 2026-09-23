@@ -97,9 +97,15 @@ test('manages resources behind authentication, preserves imports and exposes saf
     expect((await request('/memory-core/stop', 'POST', {})).status).toBe(200)
     expect((await request('/memory-core/install', 'POST', { archivePath: join(dir, 'missing.tgz') })).status).toBe(409)
     expect(await (await request('/memory-core')).json()).toMatchObject({ owned: false, phase: 'failed' })
-    expect(await (await request('/projects/p/memory')).json()).toEqual({ code: 'MISSING_CREDENTIAL' })
+    expect(await (await request('/projects/p/memory')).json()).toMatchObject({
+      code: 'CONFLICT',
+      data: { code: 'MISSING_CREDENTIAL' }
+    })
     process.env.HTTP_MEMORY_TEST = 'private-value'
-    expect(await (await request('/projects/p/memory')).json()).toEqual({ code: 'MEMORY_UNAVAILABLE' })
+    expect(await (await request('/projects/p/memory')).json()).toMatchObject({
+      code: 'CONFLICT',
+      data: { code: 'MEMORY_UNAVAILABLE' }
+    })
     expect((await request('/projects/p/memory?limit=-1')).status).toBe(400)
     delete process.env.HTTP_MEMORY_TEST
     expect(await (await request('/projects/p/memory-writes')).json()).toMatchObject([
@@ -113,4 +119,4 @@ test('manages resources behind authentication, preserves imports and exposes saf
     await mcp.dispose()
     await rm(dir, { force: true, recursive: true })
   }
-})
+}, 20000)

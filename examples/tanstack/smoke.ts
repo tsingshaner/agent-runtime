@@ -20,12 +20,14 @@ const server = await startServer({
 })
 const client = new RuntimeClient(server.url, server.token)
 try {
-  const project = await client.request<{ id: string }>('/projects', { name: 'TanStack smoke' })
-  const session = await client.request<{ id: string }>('/sessions', {
-    cwd: dir,
-    model: process.env.CODEX_MODEL,
-    projectId: project.id,
-    runtime: 'codex'
+  const project = await client.api.projects.create({ body: { name: 'TanStack smoke' } })
+  const session = await client.api.sessions.create({
+    body: {
+      cwd: dir,
+      model: process.env.CODEX_MODEL,
+      projectId: project.id,
+      runtime: 'codex'
+    }
   })
   const { runId } = await client.submit(session.id, 'Without tools, reply with exactly hello.')
   const types: string[] = []

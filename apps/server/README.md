@@ -1,13 +1,19 @@
-# Local runtime HTTP service
+# Local runtime HTTP service (Nitro + oRPC)
 
-Run `pnpm --filter @internal/server start`. `RUNTIME_DATA_DIR` defaults to
+Run `pnpm --filter @internal/server start` to build and launch the Nitro Node server. `RUNTIME_DATA_DIR` defaults to
 `.agent-runtime`; `PORT` defaults to 4310. The listener binds 127.0.0.1 only.
 Read the generated bearer token from `http-token` in that data directory (mode
 0600); send it as `Authorization: Bearer <token>`, never in a URL. Programmatic
 `startServer` returns the token without logging it and accepts an explicit
 `origins` allowlist for browser clients. SIGINT/SIGTERM close the owned Manager.
 
-All request bodies use JSON. Creation of a session requires explicit `model`,
+Contracts live in the browser-safe `@qingshaner/runtime-contract` workspace package.
+Nitro 3.0.260903-beta and oRPC 2.0.0-beta.36 are pinned to the reference implementation.
+`GET /spec.json` serves generated OpenAPI JSON behind the same bearer/Host/Origin checks.
+Use `OpenAPILink(contract, { origin, headers })` and `createORPCClient` for typed REST calls;
+see `examples/tanstack/client.ts`. There is no separate RPC endpoint or docs UI.
+
+All request bodies use JSON (maximum 1 MiB). Creation of a session requires explicit `model`,
 `runtime`, `projectId`, and existing `cwd`. Routes delegate to the SDK:
 
 - `GET/POST /projects`, `GET/PATCH /projects/:id`
@@ -25,11 +31,17 @@ and `archived`. SSE data is a standard AG-UI event; each SSE `id` is its durable
 run-local sequence. Reconnect using `Last-Event-ID` or `afterSequence` (exclusive).
 Disconnecting only stops that subscriber. Cleared history returns 410; stream
 failures after headers use an SSE `error` event with a safe code, not a fabricated
-Run terminal event. Errors omit raw native diagnostics and request contents.
+Run terminal event. Errors use oRPC JSON (`defined`, `code`, `message`, optional `data`), replacing the
+old `{ code }` response. State conflicts retain the SDK code in `data.code`;
+validation/not-found/cleared-history errors use `BAD_REQUEST`/`NOT_FOUND`/`GONE`.
+Errors omit raw native diagnostics and request contents. Input and output schemas
+validate every route. SSE is encoded by oRPC: `message` carries AG-UI data,
+`error` carries an oRPC error, and `close` ends the transport. Consumers should use
+OpenAPILink to distinguish errors from AG-UI events; no second AG-UI route is maintained.
 
 Normal tests use real HTTP and PGlite with a controlled adapter, no model calls.
 Explicit real smoke: `RUN_CODEX_SMOKE=1 CODEX_MODEL=<model> pnpm --filter @internal/server smoke`.
-On 2026-09-17, Codex 0.153.4 / gpt-6-astra passed real submission, text SSE,
+Before the oRPC migration, on 2026-09-17, Codex 0.153.4 / gpt-6-astra passed real submission, text SSE,
 unique success and cursor replay. Native approval/input/cancellation were not
 triggered (UNVERIFIED); controlled HTTP tests cover those routes.
 
@@ -66,3 +78,10 @@ The script loads `.env.local` without printing credentials. On 2026-09-17 this
 passed HTTP resource CRUD, same-session resource updates, native MCP approvals,
 accepted memory receipts, Core lifecycle and L0 persistence across restart.
 Native input requests and cancellation remain unverified by this real smoke.
+
+Migration verification (2026-09-23): controlled HTTP tests cover typed clients,
+cursor replay, approval/input/cancellation, independent subscriptions, authenticated
+OpenAPI, request limits and safe errors. `pnpm --filter @internal/server smoke:nitro`
+checks the built Nitro process, token permissions, HTTP access, shutdown and restart
+without calling a model. Historical real-model results above do not verify this
+transport migration; real-model smoke must be explicitly rerun to claim that.

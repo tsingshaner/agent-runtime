@@ -10,6 +10,7 @@
       "@qingshaner/memory": ["../packages/memory/src/index.ts"],
       "@qingshaner/runtime": ["../packages/runtime/src/index.ts"],
       "@qingshaner/runtime-codex": ["../packages/runtime-codex/src/index.ts"],
+      "@qingshaner/runtime-contract": ["../packages/contract/src/index.ts"],
       "@qingshaner/skill": ["../packages/skill/src/index.ts"]
     },
     "resolveJsonModule": true,

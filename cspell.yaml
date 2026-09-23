@@ -16,6 +16,7 @@ ignorePaths:
   - bun.lock.json
 
 words:
+  - srvx
   - modelcontextprotocol
   - genai
   - koffi

@@ -1,47 +1,70 @@
 // cspell:ignore nosniff
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { once } from 'node:events'
-import { createServer } from 'node:http'
 
-import type { IncomingMessage, ServerResponse } from 'node:http'
-import { RuntimeError, RuntimeManager } from '@qingshaner/runtime'
+import { SmartCoercionHandlerPlugin } from '@orpc/json-schema'
+import { OpenAPIGenerator } from '@orpc/openapi'
+import { OpenAPIHandler } from '@orpc/openapi/fetch'
+import { COMMON_ERROR_STATUS_MAP, ORPCError } from '@orpc/server'
+import { RequestLimitHandlerPlugin } from '@orpc/server/plugins'
+import { ValibotToJsonSchemaConverter } from '@orpc/valibot'
+import { RuntimeManager } from '@qingshaner/runtime'
+import { contract, EventSchemas } from '@qingshaner/runtime-contract'
+import { serve } from 'srvx/node'
 import * as v from 'valibot'
+import { zodToJsonSchema } from 'zod-to-json-schema'
 
-import type { ManagerOptions, RuntimeAdapter } from '@qingshaner/runtime'
+import { router, type ServiceOptions, safeError } from './router.ts'
 
-import { body, json, parse } from './http.ts'
-import { type ResourceServerOptions, resourceRoute } from './resources.ts'
+export type ServerOptions = ServiceOptions & { port?: number; origins?: string[] }
+const generator = new OpenAPIGenerator({
+  converters: [
+    new ValibotToJsonSchemaConverter(),
+    {
+      condition: (schema) => schema === EventSchemas,
+      convert: () => [
+        zodToJsonSchema(EventSchemas as unknown as Parameters<typeof zodToJsonSchema>[0], { target: 'openApi3' }),
+        false
+      ]
+    }
+  ]
+})
+let spec: ReturnType<typeof generator.generate> | undefined
+const specification = () =>
+  (spec ??= generator.generate(contract, {
+    base: {
+      components: { securitySchemes: { bearerAuth: { scheme: 'bearer', type: 'http' } } },
+      info: { title: 'Agent Runtime', version: '1.0.0' },
+      security: [{ bearerAuth: [] }],
+      servers: [{ url: '/' }]
+    }
+  }))
+const handler = new OpenAPIHandler(router, {
+  // Validation issues can contain input values. Never return diagnostics to HTTP clients.
+  interceptors: [
+    async ({ next }) => {
+      try {
+        return await next()
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new ORPCError('BAD_REQUEST')
+        }
+        const safe = safeError(error)
+        if (safe.code === 'BAD_REQUEST' || safe.code === 'INTERNAL_SERVER_ERROR') {
+          throw new ORPCError(safe.code)
+        }
+        throw safe
+      }
+    }
+  ],
+  plugins: [
+    new SmartCoercionHandlerPlugin({ converters: [new ValibotToJsonSchemaConverter({ cache: true })] }),
+    new RequestLimitHandlerPlugin({ maxBodySize: 1024 * 1024 })
+  ]
+})
 
-const page = (url: URL) => {
-  const result: { limit?: number; cursor?: string } = {}
-  if (url.searchParams.has('limit')) {
-    result.limit = Number(url.searchParams.get('limit'))
-  }
-  if (url.searchParams.has('cursor')) {
-    result.cursor = url.searchParams.get('cursor') ?? ''
-  }
-  return result
-}
-const errorCode = (error: unknown) =>
-  error instanceof Error && 'code' in error && typeof error.code === 'string' && /^[A-Z_]+$/.test(error.code)
-    ? error.code
-    : 'INTERNAL_ERROR'
-const statusCode = (code: string) =>
-  ['INVALID_INPUT', 'INVALID_PATH', 'INVALID_CONFIG', 'INVALID_SKILL'].includes(code)
-    ? 400
-    : code.endsWith('_NOT_FOUND')
-      ? 404
-      : code === 'EVENTS_CLEARED'
-        ? 410
-        : code === 'INTERNAL_ERROR' || code === 'STORAGE_ERROR'
-          ? 500
-          : 409
-
-/** Own one Manager and loopback HTTP listener. The returned token is never logged. */
-export const startServer = async <A extends RuntimeAdapter>(
-  options: ManagerOptions<A> & ResourceServerOptions & { port?: number; origins?: string[] }
-) => {
-  parse(
+/** Shared by Nitro and the programmatic HTTP listener. Owns one Manager. */
+export const createService = async (options: ServerOptions) => {
+  v.parse(
     v.strictObject({
       origins: v.optional(v.array(v.string())),
       port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(65535)))
@@ -57,205 +80,119 @@ export const startServer = async <A extends RuntimeAdapter>(
   })
   const token = randomBytes(32).toString('hex')
   const expected = Buffer.from(`Bearer ${token}`)
-  const subscriptions = new Set<AbortController>()
-  let closing = false
-  let url = ''
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Keep subscription validation and cleanup together.
-  const stream = async (request: IncomingMessage, response: ServerResponse, runId: string, target: URL) => {
-    const cursor = request.headers['last-event-id'] ?? target.searchParams.get('afterSequence') ?? '0'
-    if (typeof cursor !== 'string' || !/^\d+$/.test(cursor)) {
-      throw new RuntimeError('INVALID_INPUT', 'Invalid cursor')
-    }
-    const afterSequence = Number(cursor)
-    const run = await manager.getRun(runId)
-    if (run.eventsCleared) {
-      throw new RuntimeError('EVENTS_CLEARED', 'Events cleared')
-    }
-    if (!Number.isSafeInteger(afterSequence) || afterSequence > run.lastSequence) {
-      throw new RuntimeError('INVALID_INPUT', 'Invalid cursor')
-    }
-    const controller = new AbortController()
-    subscriptions.add(controller)
-    const abort = () => controller.abort()
-    response.once('close', abort)
-    response.writeHead(200, {
-      'cache-control': 'no-cache',
-      'content-type': 'text/event-stream',
-      'x-content-type-options': 'nosniff'
-    })
-    response.flushHeaders()
-    try {
-      for await (const envelope of manager.subscribe(runId, { afterSequence, signal: controller.signal })) {
-        if (!response.write(`id: ${envelope.sequence}\ndata: ${JSON.stringify(envelope.event)}\n\n`)) {
-          await once(response, 'drain', { signal: controller.signal })
-        }
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        response.write(`event: error\ndata: ${JSON.stringify({ code: errorCode(error) })}\n\n`)
-      }
-    } finally {
-      response.off('close', abort)
-      subscriptions.delete(controller)
-      response.end()
-    }
-  }
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Thin routes delegate lifecycle and validation to the Manager.
-  const route = async (request: IncomingMessage, response: ServerResponse) => {
-    const origin = request.headers.origin
-    if (origin && origin !== url && !options.origins?.includes(origin)) {
-      return json(response, { code: 'FORBIDDEN' }, 403)
-    }
-    if (request.headers.host !== new URL(url).host) {
-      return json(response, { code: 'FORBIDDEN' }, 403)
-    }
-    if (origin) {
-      response.setHeader('access-control-allow-origin', origin)
-      response.setHeader('vary', 'Origin')
-    }
-    if (request.method === 'OPTIONS' && origin) {
-      response.setHeader('access-control-allow-methods', 'GET, POST, PATCH, DELETE')
-      response.setHeader('access-control-allow-headers', 'Authorization, Content-Type, Last-Event-ID')
-      response.writeHead(204)
-      response.end()
-      return
-    }
-    const authorization = Buffer.from(request.headers.authorization ?? '')
-    if (authorization.length !== expected.length || !timingSafeEqual(authorization, expected)) {
-      return json(response, { code: 'UNAUTHORIZED' }, 401)
-    }
-    if (closing) {
-      return json(response, { code: 'DISPOSED' }, 503)
-    }
-    let target: URL
-    let parts: string[]
-    try {
-      target = new URL(request.url ?? '/', url)
-      parts = target.pathname.split('/').filter(Boolean).map(decodeURIComponent)
-    } catch {
-      throw new RuntimeError('INVALID_INPUT', 'Invalid URL')
-    }
-    const managed = await resourceRoute(request, parts, target, manager, options)
-    if (managed) {
-      return json(response, managed.value)
-    }
-    const [resource, id = '', action, item = ''] = parts
-    const method = request.method
-    let result: unknown
-    if (method === 'GET' && target.pathname === '/health') {
-      result = { status: 'ready' }
-    } else if (resource === 'projects' && parts.length <= 2) {
-      if (method === 'GET') {
-        result = id ? await manager.getProject(id) : await manager.listProjects(page(target))
-      } else if (method === 'POST' && !id) {
-        result = await manager.createProject((await body(request)) as never)
-      } else if (method === 'PATCH' && id) {
-        result = await manager.updateProject(id, await body(request))
-      } else {
-        throw new RuntimeError('ROUTE_NOT_FOUND', 'Route not found')
-      }
-    } else if (resource === 'sessions' && parts.length <= 3) {
-      if (method === 'GET' && !id) {
-        const archived = target.searchParams.get('archived')
-        if (archived !== null && archived !== 'true' && archived !== 'false') {
-          throw new RuntimeError('INVALID_INPUT', 'Invalid archived filter')
-        }
-        result = await manager.listSessions({
-          ...page(target),
-          ...(archived === null ? {} : { archived: archived === 'true' }),
-          ...(target.searchParams.has('projectId') ? { projectId: target.searchParams.get('projectId') ?? '' } : {}),
-          ...(target.searchParams.has('runtime') ? { runtime: target.searchParams.get('runtime') ?? '' } : {})
-        })
-      } else if (method === 'GET' && id && !action) {
-        result = await manager.getSession(id)
-      } else if (method === 'POST' && !id) {
-        result = await manager.createSession((await body(request)) as never)
-      } else if (method === 'POST' && action === 'resume') {
-        result = await manager.resumeSession(id)
-      } else if (method === 'POST' && action === 'archive') {
-        result = await manager.archiveSession(id)
-      } else if (method === 'POST' && action === 'unarchive') {
-        result = await manager.unarchiveSession(id)
-      } else if (method === 'POST' && action === 'runs') {
-        result = await manager.run(id, (await body(request)) as never)
-      } else if (method === 'GET' && action === 'runs') {
-        result = await manager.listRuns(id, page(target))
-      } else {
-        throw new RuntimeError('ROUTE_NOT_FOUND', 'Route not found')
-      }
-    } else if (resource === 'runs' && id && parts.length <= 4) {
-      if (method === 'GET' && !action) {
-        result = await manager.getRun(id)
-      } else if (method === 'GET' && action === 'events' && !item) {
-        return await stream(request, response, id, target)
-      } else if (method === 'DELETE' && action === 'events' && !item) {
-        result = await manager.clearRunEvents(id)
-      } else if (method === 'POST' && action === 'cancel' && !item) {
-        result = await manager.cancel(id)
-      } else if (method === 'GET' && action === 'approvals' && !item) {
-        result = await manager.listPendingApprovals(id)
-      } else if (method === 'GET' && action === 'inputs' && !item) {
-        result = await manager.listPendingInputs(id)
-      } else if (method === 'POST' && action === 'approvals' && item) {
-        const value = parse(v.strictObject({ decision: v.picklist(['approve', 'deny']) }), await body(request))
-        result = await manager.respondApproval(id, item, value.decision)
-      } else if (method === 'POST' && action === 'inputs' && item) {
-        const value = parse(v.strictObject({ answers: v.record(v.string(), v.array(v.string())) }), await body(request))
-        result = await manager.respondInput(id, item, value.answers)
-      } else {
-        throw new RuntimeError('ROUTE_NOT_FOUND', 'Route not found')
-      }
-    } else {
-      throw new RuntimeError('ROUTE_NOT_FOUND', 'Route not found')
-    }
-    json(response, result)
-  }
-  const server = createServer((request, response) => {
-    void route(request, response).catch((error: unknown) => {
-      if (response.headersSent) {
-        response.destroy()
-      } else {
-        const code = errorCode(error)
-        json(response, { code }, statusCode(code))
-      }
-    })
-  })
-  server.requestTimeout = 15000
-  server.headersTimeout = 10000
-  try {
-    server.listen(options.port ?? 0, '127.0.0.1')
-    await once(server, 'listening')
-  } catch (error) {
-    try {
-      await manager.dispose()
-    } finally {
-      await options.memoryCore?.dispose()
-    }
-    throw error
-  }
-  const address = server.address()
-  if (!address || typeof address === 'string') {
-    throw new Error('Missing listener address')
-  }
-  url = `http://127.0.0.1:${address.port}`
+  const shutdown = new AbortController()
+  let origin = ''
   let closePromise: Promise<void> | undefined
   const close = () =>
     (closePromise ??= (async () => {
-      closing = true
-      const closed = new Promise<void>((resolve) => server.close(() => resolve()))
-      for (const subscription of subscriptions) {
-        subscription.abort()
-      }
-      server.closeAllConnections()
+      shutdown.abort()
       try {
         await manager.dispose()
       } finally {
-        try {
-          await options.memoryCore?.dispose()
-        } finally {
-          await closed
-        }
+        await options.memoryCore?.dispose()
       }
     })())
-  return { close, token, url }
+  const authorize = (request: Request, headers: Headers): Response | undefined => {
+    const requestOrigin = request.headers.get('origin')
+    if (
+      !origin ||
+      request.headers.get('host') !== new URL(origin).host ||
+      (requestOrigin && requestOrigin !== origin && !options.origins?.includes(requestOrigin))
+    ) {
+      throw new ORPCError('FORBIDDEN')
+    }
+    if (requestOrigin) {
+      headers.set('access-control-allow-origin', requestOrigin)
+      headers.set('vary', 'Origin')
+    }
+    if (request.method === 'OPTIONS' && requestOrigin) {
+      headers.set('access-control-allow-methods', 'GET, POST, PATCH, DELETE')
+      headers.set('access-control-allow-headers', 'Authorization, Content-Type, Last-Event-ID')
+      return new Response(null, { headers, status: 204 })
+    }
+    const authorization = Buffer.from(request.headers.get('authorization') ?? '')
+    if (authorization.length !== expected.length || !timingSafeEqual(authorization, expected)) {
+      throw new ORPCError('UNAUTHORIZED')
+    }
+    return undefined
+  }
+  const fetchRequest = async (request: Request): Promise<Response> => {
+    const headers = new Headers({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
+    try {
+      const preflight = authorize(request, headers)
+      if (preflight) {
+        return preflight
+      }
+      if (shutdown.signal.aborted) {
+        throw new ORPCError('SERVICE_UNAVAILABLE')
+      }
+      const url = new URL(request.url)
+      try {
+        decodeURIComponent(url.pathname)
+      } catch {
+        throw new ORPCError('BAD_REQUEST')
+      }
+      const response =
+        request.method === 'GET' && url.pathname === '/spec.json'
+          ? Response.json(await specification())
+          : (await handler.handle(request, { context: { manager, options, shutdown: shutdown.signal } })).response
+      if (!response) {
+        throw new ORPCError('NOT_FOUND')
+      }
+      headers.forEach((value, key) => {
+        response.headers.set(key, value)
+      })
+      return response
+    } catch (error) {
+      const safe = safeError(error)
+      return Response.json(safe.toJSON(), {
+        headers,
+        status: (COMMON_ERROR_STATUS_MAP as Record<string, number>)[safe.code] ?? 500
+      })
+    }
+  }
+  return {
+    close,
+    fetch: fetchRequest,
+    setOrigin: (value: string) => {
+      origin = value
+    },
+    token
+  }
+}
+
+/** Loopback listener for embedding and real HTTP tests; production uses Nitro. */
+export const startServer = async (options: ServerOptions) => {
+  const service = await createService(options)
+  const server = serve({
+    fetch: service.fetch,
+    gracefulShutdown: false,
+    hostname: '127.0.0.1',
+    node: { headersTimeout: 10000, requestTimeout: 15000 },
+    port: options.port ?? 0,
+    silent: true
+  })
+  try {
+    await server.ready()
+  } catch (error) {
+    await service.close()
+    throw error
+  }
+  const url = server.url?.replace(/\/$/, '')
+  if (!url) {
+    await server.close(true)
+    await service.close()
+    throw new Error('Missing listener address')
+  }
+  service.setOrigin(url)
+  let closing: Promise<void> | undefined
+  const close = () =>
+    (closing ??= (async () => {
+      const results = await Promise.allSettled([service.close(), server.close(true)])
+      const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason)
+      if (errors.length > 0) {
+        throw new AggregateError(errors, 'Server shutdown failed')
+      }
+    })())
+  return { close, token: service.token, url }
 }

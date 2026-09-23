@@ -5,6 +5,10 @@
   "ignoreDependencies": ["drizzle-kit"],
   "tags": ["-lintignore"],
   "workspaces": {
+    "apps/server": {
+      "entry": ["src/lifecycle.ts", "src/index.ts", "*-smoke.ts"],
+      "project": ["src/**/*.ts", "*.ts"]
+    },
     "examples/*": {
       "entry": ["*.test.ts"],
       "project": ["*.ts"]

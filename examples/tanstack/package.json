@@ -9,6 +9,9 @@
   "dependencies": {
     "@qingshaner/runtime": "workspace:*",
     "@qingshaner/runtime-codex": "workspace:*",
-    "@tanstack/ai-client": "0.32.0"
+    "@tanstack/ai-client": "0.32.0",
+    "@qingshaner/runtime-contract": "workspace:*",
+    "@orpc/client": "2.0.0-beta.36",
+    "@orpc/openapi": "2.0.0-beta.36"
   }
 }

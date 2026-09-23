@@ -4,6 +4,7 @@ import { defineConfig, type UserConfig } from 'tsdown'
 
 const ROOT = import.meta.dirname
 const packages = [
+  ['contract', '@qingshaner/runtime-contract'],
   ['runtime', '@qingshaner/runtime'],
   ['memory', '@qingshaner/memory'],
   ['knowledge', '@qingshaner/knowledge'],
@@ -24,6 +25,7 @@ export default defineConfig(
       alwaysBundle: ['@internal/shared'],
       neverBundle: [
         '@ag-ui/core',
+        /^@orpc\//,
         '@electric-sql/pglite',
         '@logtape/logtape',
         '@qingshaner/utility',

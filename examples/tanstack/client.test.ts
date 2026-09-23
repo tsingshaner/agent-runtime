@@ -39,12 +39,14 @@ test('official SSE client reconnects with GET, renders once, and answers durable
   }
   const client = new RuntimeClient(server.url, server.token, fetchClient)
   try {
-    const project = await client.request<{ id: string }>('/projects', { name: 'test' })
-    const session = await client.request<{ id: string }>('/sessions', {
-      cwd: dir,
-      model: 'test',
-      projectId: project.id,
-      runtime: 'manual'
+    const project = await client.api.projects.create({ body: { name: 'test' } })
+    const session = await client.api.sessions.create({
+      body: {
+        cwd: dir,
+        model: 'test',
+        projectId: project.id,
+        runtime: 'manual'
+      }
     })
     const { runId } = await client.submit(session.id, 'hello')
     await adapter.waitStarted(runId)
@@ -124,3 +126,32 @@ test('official SSE client reconnects with GET, renders once, and answers durable
     await rm(dir, { force: true, recursive: true })
   }
 }, 30000)
+
+test('surfaces an oRPC stream error without retrying or inventing a Run terminal', async () => {
+  let requests = 0
+  const events: string[] = []
+  const client = new RuntimeClient('http://127.0.0.1:4310', 'test', () => {
+    requests++
+    return Promise.resolve(
+      new Response(
+        [
+          'id: 1\nevent: message\ndata: {"type":"RUN_STARTED","threadId":"session","runId":"run"}\n\n',
+          'event: error\ndata: {"defined":true,"code":"INTERNAL_SERVER_ERROR","message":"Internal error"}\n\n'
+        ].join(''),
+        { headers: { 'content-type': 'text/event-stream' } }
+      )
+    )
+  })
+  await expect(client.watch('run', { onEvent: (event) => events.push(event.type) })).rejects.toMatchObject({
+    code: 'INTERNAL_SERVER_ERROR'
+  })
+  expect(events).toEqual(['RUN_STARTED'])
+  expect(requests).toBe(1)
+})
+
+test('decodes an event subscription HTTP error as an oRPC error', async () => {
+  const client = new RuntimeClient('http://127.0.0.1:4310', 'test', async () =>
+    Response.json({ code: 'GONE', defined: true, message: 'Event history cleared' }, { status: 410 })
+  )
+  await expect(client.watch('run')).rejects.toMatchObject({ code: 'GONE' })
+})

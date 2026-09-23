@@ -3,9 +3,8 @@
 Run `pnpm --filter @internal/server start` to build and launch the Nitro Node server. `RUNTIME_DATA_DIR` defaults to
 `.agent-runtime`; `PORT` defaults to 4310. The listener binds 127.0.0.1 only.
 Read the generated bearer token from `http-token` in that data directory (mode
-0600); send it as `Authorization: Bearer <token>`, never in a URL. Programmatic
-`startServer` returns the token without logging it and accepts an explicit
-`origins` allowlist for browser clients. SIGINT/SIGTERM close the owned Manager.
+0600); send it as `Authorization: Bearer <token>`, never in a URL. Nitro is the only HTTP listener;
+there is no programmatic `startServer` entry point. SIGINT/SIGTERM close the owned Manager.
 
 Contracts live in the browser-safe `@qingshaner/runtime-contract` workspace package.
 Nitro 3.0.260903-beta and oRPC 2.0.0-beta.36 are pinned to the reference implementation.
@@ -39,11 +38,12 @@ validate every route. SSE is encoded by oRPC: `message` carries AG-UI data,
 `error` carries an oRPC error, and `close` ends the transport. Consumers should use
 OpenAPILink to distinguish errors from AG-UI events; no second AG-UI route is maintained.
 
-Normal tests use real HTTP and PGlite with a controlled adapter, no model calls.
+Normal tests exercise the production Fetch handler and real PGlite with a controlled adapter, without opening a listener or calling a model.
+All HTTP smoke scripts launch the built Nitro server.
 Explicit real smoke: `RUN_CODEX_SMOKE=1 CODEX_MODEL=<model> pnpm --filter @internal/server smoke`.
 Before the oRPC migration, on 2026-09-17, Codex 0.153.4 / gpt-6-astra passed real submission, text SSE,
 unique success and cursor replay. Native approval/input/cancellation were not
-triggered (UNVERIFIED); controlled HTTP tests cover those routes.
+triggered (UNVERIFIED); controlled Fetch-boundary tests cover those routes.
 
 
 Resource routes (same bearer authentication):
@@ -68,7 +68,7 @@ Set `MEMORY_ENDPOINT` to attach a gateway, with its credential in `MEMORY_API_KE
 Set `MEMORY_MODEL` and `MEMORY_BASE_URL` to enable owned Core lifecycle routes;
 the shared default gateway endpoint is `http://127.0.0.1:8420`. Model credentials
 are referenced by `MEMORY_MODEL_API_KEY_ENV` (default `DEEPSEEK_API_KEY`).
-`MEMORY_SERVICE_ID` defaults to `agent-runtime`. Installation and startup require
+`MEMORY_SERVICE_ID` defaults to `agent-runtime`; `MEMORY_SERVICE_DIR` optionally overrides the owned Core directory (default `<dataDir>/memory-core`). Installation and startup require
 explicit API calls; shutdown stops only the owned process. Core is pinned to
 1.0.2-beta.1; existing data persists across stop/start.
 
@@ -79,7 +79,7 @@ passed HTTP resource CRUD, same-session resource updates, native MCP approvals,
 accepted memory receipts, Core lifecycle and L0 persistence across restart.
 Native input requests and cancellation remain unverified by this real smoke.
 
-Migration verification (2026-09-23): controlled HTTP tests cover typed clients,
+Migration verification (2026-09-23): controlled Fetch-boundary tests cover typed clients,
 cursor replay, approval/input/cancellation, independent subscriptions, authenticated
 OpenAPI, request limits and safe errors. `pnpm --filter @internal/server smoke:nitro`
 checks the built Nitro process, token permissions, HTTP access, shutdown and restart

@@ -2,7 +2,7 @@ import { implement, ORPCError, withEventMeta } from '@orpc/server'
 import { ProjectMemory } from '@qingshaner/memory'
 import { RuntimeError } from '@qingshaner/runtime'
 import { contract } from '@qingshaner/runtime-contract'
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
 import type { MemoryCoreService } from '@qingshaner/memory'
 import type { ManagerOptions, RuntimeManager } from '@qingshaner/runtime'
@@ -60,11 +60,11 @@ const base = implementer.use(async ({ next }) => {
   }
 })
 const project = base.use(async ({ next, context }, input) => {
-  const parsed = v.safeParse(v.object({ params: v.object({ id: v.string() }) }), input)
+  const parsed = z.safeParse(z.object({ params: z.object({ id: z.string() }) }), input)
   if (!parsed.success) {
     throw new ORPCError('BAD_REQUEST')
   }
-  await context.manager.getProject(parsed.output.params.id)
+  await context.manager.getProject(parsed.data.params.id)
   return next()
 })
 const memory = (context: ServiceContext) =>

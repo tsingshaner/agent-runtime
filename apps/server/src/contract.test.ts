@@ -2,28 +2,60 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import * as v from 'valibot'
 import { describe, expect, test } from 'vitest'
+import * as z from 'zod/mini'
 
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
-import { startServer } from './index'
+import { openTestService } from '../test/service.fixture'
 
 describe('HTTP contract', () => {
   test('serves authenticated OpenAPI with concrete resource and event schemas', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'runtime-contract-'))
-    const server = await startServer({ dataDir: directory, runtimes: [new ManualAdapter()] })
+    const server = await openTestService({ dataDir: directory, runtimes: [new ManualAdapter()] })
+    const fetch = server.fetch
     try {
       expect((await fetch(`${server.url}/spec.json`)).status).toBe(401)
       const response = await fetch(`${server.url}/spec.json`, { headers: { authorization: `Bearer ${server.token}` } })
       expect(response.status).toBe(200)
-      const spec = v.parse(
-        v.object({
-          paths: v.record(v.string(), v.unknown()),
-          security: v.array(v.record(v.string(), v.array(v.string())))
+      const spec = z.parse(
+        z.object({
+          paths: z.record(z.string(), z.record(z.string(), z.unknown())),
+          security: z.array(z.record(z.string(), z.array(z.string())))
         }),
         await response.json()
       )
       expect(spec.security).toEqual([{ bearerAuth: [] }])
+      const operations = Object.values(spec.paths).flatMap((path) =>
+        Object.entries(path)
+          .filter(([method]) => ['get', 'post', 'patch', 'delete'].includes(method))
+          .map(([, operation]) =>
+            z.parse(
+              z.object({
+                description: z.string().check(z.minLength(1)),
+                operationId: z.string().check(z.minLength(1)),
+                summary: z.string().check(z.minLength(1)),
+                tags: z.array(z.string().check(z.minLength(1))).check(z.minLength(1))
+              }),
+              operation
+            )
+          )
+      )
+      const operationIds = operations.map((operation) => operation.operationId)
+      expect(operationIds.length).toBeGreaterThan(0)
+      expect(new Set(operationIds).size).toBe(operationIds.length)
+      expect(operationIds).toEqual(
+        expect.arrayContaining([
+          'subscribeRunEvents',
+          'submitSessionRun',
+          'bindProjectSkill',
+          'listProjectSkills',
+          'unbindProjectSkill',
+          'bindProjectMcpServer',
+          'listProjectMcpServers',
+          'unbindProjectMcpServer'
+        ])
+      )
+
       expect(spec.paths['/projects']).toMatchObject({
         post: {
           requestBody: { content: { 'application/json': { schema: { properties: { name: { type: 'string' } } } } } }
@@ -44,7 +76,8 @@ describe('HTTP contract', () => {
 
   test('bounds request bodies and omits validation input values from errors', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'runtime-contract-input-'))
-    const server = await startServer({ dataDir: directory, runtimes: [new ManualAdapter()] })
+    const server = await openTestService({ dataDir: directory, runtimes: [new ManualAdapter()] })
+    const fetch = server.fetch
     try {
       const headers = { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' }
       const invalid = await fetch(`${server.url}/projects`, {

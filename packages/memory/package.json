@@ -25,6 +25,6 @@
   },
   "dependencies": {
     "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1",
-    "valibot": "1.5.0"
+    "zod": "4.6.5"
   }
 }

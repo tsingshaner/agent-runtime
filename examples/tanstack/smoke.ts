@@ -5,19 +5,14 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { CodexRuntime } from '@qingshaner/runtime-codex'
-
-import { startServer } from '../../apps/server/src/index.ts'
+import { launchNitro } from '../../apps/server/test/nitro.fixture.ts'
 import { RuntimeClient } from './client.ts'
 
 if (process.env.RUN_TANSTACK_SMOKE !== '1' || !process.env.CODEX_MODEL) {
   throw new Error('Explicit RUN_TANSTACK_SMOKE=1 and CODEX_MODEL required')
 }
 const dir = await mkdtemp(join(tmpdir(), 'tanstack-smoke-'))
-const server = await startServer({
-  dataDir: join(dir, 'db'),
-  runtimes: [new CodexRuntime({ dataDir: join(dir, 'codex') })]
-})
+const server = await launchNitro(join(dir, 'db'))
 const client = new RuntimeClient(server.url, server.token)
 try {
   const project = await client.api.projects.create({ body: { name: 'TanStack smoke' } })
@@ -53,7 +48,7 @@ try {
     'VERIFIED: real Codex HTTP SSE through official TanStack adapter/processor, ordered text, unique terminal, GET replay'
   )
   console.log(
-    'UNVERIFIED: real tool/approval/input/cancellation and network drop not triggered; controlled HTTP tests cover them'
+    'UNVERIFIED: real tool/approval/input/cancellation and network drop not triggered; controlled Fetch-boundary tests cover them'
   )
 } finally {
   await server.close()

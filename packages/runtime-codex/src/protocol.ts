@@ -1,6 +1,6 @@
 // cspell:ignore collab
 import { type Json, RuntimeError } from '@qingshaner/runtime'
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
 import type { InitializeResponse } from './schemas/InitializeResponse'
 import type { AgentMessageDeltaNotification } from './schemas/v2/AgentMessageDeltaNotification'
@@ -22,175 +22,169 @@ import type { ToolRequestUserInputResponse } from './schemas/v2/ToolRequestUserI
 import type { Turn } from './schemas/v2/Turn'
 import type { TurnError } from './schemas/v2/TurnError'
 
-export const ApprovalResponseSchema = v.strictObject({
-  decision: v.picklist(['accept', 'decline'])
-}) satisfies v.GenericSchema<unknown, CommandExecutionRequestApprovalResponse & FileChangeRequestApprovalResponse>
-export const UserInputSchema = v.object({
-  autoResolutionMs: v.nullable(v.number()),
-  isBlocking: v.boolean(),
-  itemId: v.string(),
-  questions: v.pipe(
-    v.array(
-      v.object({
-        header: v.string(),
-        id: v.pipe(v.string(), v.minLength(1)),
-        isOther: v.boolean(),
-        isSecret: v.boolean(),
-        options: v.nullable(v.array(v.object({ description: v.string(), label: v.string() }))),
-        question: v.pipe(v.string(), v.minLength(1))
+export const ApprovalResponseSchema = z.strictObject({
+  decision: z.enum(['accept', 'decline'])
+}) satisfies z.ZodMiniType<CommandExecutionRequestApprovalResponse & FileChangeRequestApprovalResponse, unknown>
+export const UserInputSchema = z.object({
+  autoResolutionMs: z.nullable(z.number()),
+  isBlocking: z.boolean(),
+  itemId: z.string(),
+  questions: z
+    .array(
+      z.object({
+        header: z.string(),
+        id: z.string().check(z.minLength(1)),
+        isOther: z.boolean(),
+        isSecret: z.boolean(),
+        options: z.nullable(z.array(z.object({ description: z.string(), label: z.string() }))),
+        question: z.string().check(z.minLength(1))
       })
+    )
+    .check(
+      z.minLength(1),
+      z.refine((questions) => new Set(questions.map(({ id }) => id)).size === questions.length)
     ),
-    v.minLength(1),
-    v.check((questions) => new Set(questions.map(({ id }) => id)).size === questions.length)
-  ),
-  threadId: v.string(),
-  turnId: v.string()
-}) satisfies v.GenericSchema<unknown, ToolRequestUserInputParams>
-export const UserInputResponseSchema = v.strictObject({
-  answers: v.record(v.string(), v.strictObject({ answers: v.array(v.string()) }))
-}) satisfies v.GenericSchema<unknown, ToolRequestUserInputResponse>
-export const EmptyAnswersSchema = v.strictObject({ answers: v.strictObject({}) }) satisfies v.GenericSchema<
-  unknown,
-  ToolRequestUserInputResponse
+  threadId: z.string(),
+  turnId: z.string()
+}) satisfies z.ZodMiniType<ToolRequestUserInputParams, unknown>
+export const UserInputResponseSchema = z.strictObject({
+  answers: z.record(z.string(), z.strictObject({ answers: z.array(z.string()) }))
+}) satisfies z.ZodMiniType<ToolRequestUserInputResponse, unknown>
+export const EmptyAnswersSchema = z.strictObject({ answers: z.strictObject({}) }) satisfies z.ZodMiniType<
+  ToolRequestUserInputResponse,
+  unknown
 >
-export const DeclineElicitationSchema = v.strictObject({
-  _meta: v.null(),
-  action: v.literal('decline'),
-  content: v.null()
-}) satisfies v.GenericSchema<unknown, McpServerElicitationRequestResponse>
-export const NoPermissionsSchema = v.strictObject({
-  permissions: v.strictObject({}),
-  scope: v.literal('turn')
-}) satisfies v.GenericSchema<unknown, PermissionsRequestApprovalResponse>
+export const DeclineElicitationSchema = z.strictObject({
+  _meta: z.null(),
+  action: z.literal('decline'),
+  content: z.null()
+}) satisfies z.ZodMiniType<McpServerElicitationRequestResponse, unknown>
+export const NoPermissionsSchema = z.strictObject({
+  permissions: z.strictObject({}),
+  scope: z.literal('turn')
+}) satisfies z.ZodMiniType<PermissionsRequestApprovalResponse, unknown>
 
-const JsonSchema: v.GenericSchema<unknown, Json> = v.lazy(() =>
-  v.union([
-    v.null(),
-    v.boolean(),
-    v.pipe(v.number(), v.finite()),
-    v.string(),
-    v.array(JsonSchema),
-    v.record(v.string(), JsonSchema)
-  ])
+const JsonSchema: z.ZodMiniType<Json, unknown> = z.lazy(() =>
+  z.union([z.null(), z.boolean(), z.number(), z.string(), z.array(JsonSchema), z.record(z.string(), JsonSchema)])
 )
-const IdSchema = v.union([v.string(), v.pipe(v.number(), v.safeInteger())])
-const optionalVersion = { jsonrpc: v.optional(v.literal('2.0')) }
-const ErrorSchema = v.object({
-  code: v.pipe(v.number(), v.integer()),
-  data: v.optional(JsonSchema),
-  message: v.string()
+const IdSchema = z.union([z.string(), z.int()])
+const optionalVersion = { jsonrpc: z.optional(z.literal('2.0')) }
+const ErrorSchema = z.object({
+  code: z.int(),
+  data: z.optional(JsonSchema),
+  message: z.string()
 })
-const EnvelopeSchema = v.union([
-  v.strictObject({ ...optionalVersion, id: IdSchema, result: JsonSchema }),
-  v.strictObject({ ...optionalVersion, error: ErrorSchema, id: IdSchema }),
-  v.strictObject({ ...optionalVersion, id: IdSchema, method: v.string(), params: v.optional(JsonSchema, null) }),
-  v.strictObject({
+const EnvelopeSchema = z.union([
+  z.strictObject({ ...optionalVersion, id: IdSchema, result: JsonSchema }),
+  z.strictObject({ ...optionalVersion, error: ErrorSchema, id: IdSchema }),
+  z.strictObject({ ...optionalVersion, id: IdSchema, method: z.string(), params: z.prefault(JsonSchema, null) }),
+  z.strictObject({
     ...optionalVersion,
-    emittedAtMs: v.optional(v.pipe(v.number(), v.safeInteger())),
-    method: v.string(),
-    params: v.optional(JsonSchema, null)
+    emittedAtMs: z.optional(z.int()),
+    method: z.string(),
+    params: z.prefault(JsonSchema, null)
   })
 ])
 
 export type Frame =
   | { kind: 'response'; id: string | number; result: Json; error?: never }
-  | { kind: 'response'; id: string | number; error: v.InferOutput<typeof ErrorSchema>; result?: never }
+  | { kind: 'response'; id: string | number; error: z.output<typeof ErrorSchema>; result?: never }
   | { kind: 'notification'; method: string; params: Json }
   | { kind: 'server-request'; id: string | number; method: string; params: Json }
 
-const InitializeResponseSchema = v.object({
-  codexHome: v.string(),
-  platformFamily: v.string(),
-  platformOs: v.string(),
-  userAgent: v.string()
-}) satisfies v.GenericSchema<unknown, InitializeResponse>
-export const ThreadResponseSchema = v.object({
-  cwd: v.string(),
-  model: v.string(),
-  thread: v.object({ id: v.string() })
-}) satisfies v.GenericSchema<unknown, Pick<ThreadStartResponse, 'cwd' | 'model'> & { thread: Pick<Thread, 'id'> }>
-const TurnErrorSchema = v.object({ message: v.string() }) satisfies v.GenericSchema<unknown, Pick<TurnError, 'message'>>
-const TurnSchema = v.object({
-  error: v.nullable(TurnErrorSchema),
-  id: v.string(),
-  status: v.picklist(['completed', 'interrupted', 'failed', 'inProgress'])
-}) satisfies v.GenericSchema<unknown, Pick<Turn, 'id' | 'status'> & { error: Pick<TurnError, 'message'> | null }>
-export const TurnResponseSchema = v.object({ turn: TurnSchema })
-export const TurnNotificationSchema = v.object({ threadId: v.string(), turn: TurnSchema })
-export const DeltaSchema = v.object({
-  delta: v.string(),
-  itemId: v.string(),
-  threadId: v.string(),
-  turnId: v.string()
-}) satisfies v.GenericSchema<unknown, AgentMessageDeltaNotification>
+const InitializeResponseSchema = z.object({
+  codexHome: z.string(),
+  platformFamily: z.string(),
+  platformOs: z.string(),
+  userAgent: z.string()
+}) satisfies z.ZodMiniType<InitializeResponse, unknown>
+export const ThreadResponseSchema = z.object({
+  cwd: z.string(),
+  model: z.string(),
+  thread: z.object({ id: z.string() })
+}) satisfies z.ZodMiniType<Pick<ThreadStartResponse, 'cwd' | 'model'> & { thread: Pick<Thread, 'id'> }, unknown>
+const TurnErrorSchema = z.object({ message: z.string() }) satisfies z.ZodMiniType<Pick<TurnError, 'message'>, unknown>
+const TurnSchema = z.object({
+  error: z.nullable(TurnErrorSchema),
+  id: z.string(),
+  status: z.enum(['completed', 'interrupted', 'failed', 'inProgress'])
+}) satisfies z.ZodMiniType<Pick<Turn, 'id' | 'status'> & { error: Pick<TurnError, 'message'> | null }, unknown>
+export const TurnResponseSchema = z.object({ turn: TurnSchema })
+export const TurnNotificationSchema = z.object({ threadId: z.string(), turn: TurnSchema })
+export const DeltaSchema = z.object({
+  delta: z.string(),
+  itemId: z.string(),
+  threadId: z.string(),
+  turnId: z.string()
+}) satisfies z.ZodMiniType<AgentMessageDeltaNotification, unknown>
 
-const AgentMessageSchema = v.object({
-  id: v.string(),
-  phase: v.nullable(v.picklist(['commentary', 'final_answer'])),
-  text: v.string(),
-  type: v.literal('agentMessage')
-}) satisfies v.GenericSchema<
-  unknown,
-  Pick<Extract<ThreadItem, { type: 'agentMessage' }>, 'type' | 'id' | 'text' | 'phase'>
+const AgentMessageSchema = z.object({
+  id: z.string(),
+  phase: z.nullable(z.enum(['commentary', 'final_answer'])),
+  text: z.string(),
+  type: z.literal('agentMessage')
+}) satisfies z.ZodMiniType<
+  Pick<Extract<ThreadItem, { type: 'agentMessage' }>, 'type' | 'id' | 'text' | 'phase'>,
+  unknown
 >
-const CommandItemSchema = v.object({
-  aggregatedOutput: v.nullable(v.string()),
-  command: v.string(),
-  cwd: v.string(),
-  exitCode: v.nullable(v.number()),
-  id: v.string(),
-  status: v.picklist(['inProgress', 'completed', 'failed', 'declined']),
-  type: v.literal('commandExecution')
-}) satisfies v.GenericSchema<
-  unknown,
+const CommandItemSchema = z.object({
+  aggregatedOutput: z.nullable(z.string()),
+  command: z.string(),
+  cwd: z.string(),
+  exitCode: z.nullable(z.number()),
+  id: z.string(),
+  status: z.enum(['inProgress', 'completed', 'failed', 'declined']),
+  type: z.literal('commandExecution')
+}) satisfies z.ZodMiniType<
   Pick<
     Extract<ThreadItem, { type: 'commandExecution' }>,
     'type' | 'id' | 'command' | 'cwd' | 'status' | 'aggregatedOutput' | 'exitCode'
-  >
+  >,
+  unknown
 >
-const FileItemSchema = v.object({
-  changes: v.array(
-    v.object({
-      diff: v.string(),
-      kind: v.variant('type', [
-        v.object({ type: v.literal('add') }),
-        v.object({ type: v.literal('delete') }),
+const FileItemSchema = z.object({
+  changes: z.array(
+    z.object({
+      diff: z.string(),
+      kind: z.discriminatedUnion('type', [
+        z.object({ type: z.literal('add') }),
+        z.object({ type: z.literal('delete') }),
         // biome-ignore lint/style/useNamingConvention: Codex protocol field name.
-        v.object({ move_path: v.nullable(v.string()), type: v.literal('update') })
+        z.object({ move_path: z.nullable(z.string()), type: z.literal('update') })
       ]),
-      path: v.string()
+      path: z.string()
     })
   ),
-  id: v.string(),
-  status: v.picklist(['inProgress', 'completed', 'failed', 'declined']),
-  type: v.literal('fileChange')
-}) satisfies v.GenericSchema<unknown, Extract<ThreadItem, { type: 'fileChange' }>>
-const McpItemSchema = v.object({
+  id: z.string(),
+  status: z.enum(['inProgress', 'completed', 'failed', 'declined']),
+  type: z.literal('fileChange')
+}) satisfies z.ZodMiniType<Extract<ThreadItem, { type: 'fileChange' }>, unknown>
+const McpItemSchema = z.object({
   arguments: JsonSchema,
-  error: v.nullable(v.object({ message: v.string() })),
-  id: v.string(),
-  result: v.nullable(
-    v.object({ _meta: v.nullable(JsonSchema), content: v.array(JsonSchema), structuredContent: v.nullable(JsonSchema) })
+  error: z.nullable(z.object({ message: z.string() })),
+  id: z.string(),
+  result: z.nullable(
+    z.object({ _meta: z.nullable(JsonSchema), content: z.array(JsonSchema), structuredContent: z.nullable(JsonSchema) })
   ),
-  server: v.string(),
-  status: v.picklist(['inProgress', 'completed', 'failed']),
-  tool: v.string(),
-  type: v.literal('mcpToolCall')
-}) satisfies v.GenericSchema<
-  unknown,
+  server: z.string(),
+  status: z.enum(['inProgress', 'completed', 'failed']),
+  tool: z.string(),
+  type: z.literal('mcpToolCall')
+}) satisfies z.ZodMiniType<
   Pick<
     Extract<ThreadItem, { type: 'mcpToolCall' }>,
     'type' | 'id' | 'server' | 'tool' | 'arguments' | 'status' | 'result' | 'error'
-  >
+  >,
+  unknown
 >
-export const ItemSchema = v.union([
+export const ItemSchema = z.union([
   AgentMessageSchema,
   CommandItemSchema,
   FileItemSchema,
   McpItemSchema,
-  v.object({
-    id: v.string(),
-    type: v.picklist([
+  z.object({
+    id: z.string(),
+    type: z.enum([
       'userMessage',
       'hookPrompt',
       'functionCallOutput',
@@ -209,58 +203,56 @@ export const ItemSchema = v.union([
     ])
   })
 ])
-export const ItemNotificationSchema = v.object({
+export const ItemNotificationSchema = z.object({
   item: ItemSchema,
-  threadId: v.string(),
-  turnId: v.string()
-}) satisfies v.GenericSchema<
-  unknown,
+  threadId: z.string(),
+  turnId: z.string()
+}) satisfies z.ZodMiniType<
   Pick<ItemStartedNotification & ItemCompletedNotification, 'threadId' | 'turnId'> & {
     item: Pick<ThreadItem, 'type' | 'id'>
-  }
+  },
+  unknown
 >
-const AvailableDecisionsSchema = v.optional(
-  v.nullable(
-    v.array(
-      v.union([v.picklist(['accept', 'acceptForSession', 'decline', 'cancel']), v.record(v.string(), JsonSchema)])
-    )
+const AvailableDecisionsSchema = z.optional(
+  z.nullable(
+    z.array(z.union([z.enum(['accept', 'acceptForSession', 'decline', 'cancel']), z.record(z.string(), JsonSchema)]))
   )
 )
-export const CommandApprovalSchema = v.object({
+export const CommandApprovalSchema = z.object({
   availableDecisions: AvailableDecisionsSchema,
-  command: v.optional(v.nullable(v.string())),
-  cwd: v.optional(v.nullable(v.string())),
-  itemId: v.string(),
-  reason: v.optional(v.nullable(v.string())),
-  threadId: v.string(),
-  turnId: v.string()
-}) satisfies v.GenericSchema<
-  unknown,
-  Pick<CommandExecutionRequestApprovalParams, 'threadId' | 'turnId' | 'itemId' | 'command' | 'cwd' | 'reason'>
+  command: z.optional(z.nullable(z.string())),
+  cwd: z.optional(z.nullable(z.string())),
+  itemId: z.string(),
+  reason: z.optional(z.nullable(z.string())),
+  threadId: z.string(),
+  turnId: z.string()
+}) satisfies z.ZodMiniType<
+  Pick<CommandExecutionRequestApprovalParams, 'threadId' | 'turnId' | 'itemId' | 'command' | 'cwd' | 'reason'>,
+  unknown
 >
-export const FileApprovalSchema = v.object({
+export const FileApprovalSchema = z.object({
   availableDecisions: AvailableDecisionsSchema,
-  grantRoot: v.optional(v.nullable(v.string())),
-  itemId: v.string(),
-  reason: v.optional(v.nullable(v.string())),
-  threadId: v.string(),
-  turnId: v.string()
-}) satisfies v.GenericSchema<
-  unknown,
-  Pick<FileChangeRequestApprovalParams, 'threadId' | 'turnId' | 'itemId' | 'reason' | 'grantRoot'>
+  grantRoot: z.optional(z.nullable(z.string())),
+  itemId: z.string(),
+  reason: z.optional(z.nullable(z.string())),
+  threadId: z.string(),
+  turnId: z.string()
+}) satisfies z.ZodMiniType<
+  Pick<FileChangeRequestApprovalParams, 'threadId' | 'turnId' | 'itemId' | 'reason' | 'grantRoot'>,
+  unknown
 >
-export const RequestResolvedSchema = v.object({ requestId: IdSchema, threadId: v.string() }) satisfies v.GenericSchema<
-  unknown,
-  ServerRequestResolvedNotification
+export const RequestResolvedSchema = z.object({ requestId: IdSchema, threadId: z.string() }) satisfies z.ZodMiniType<
+  ServerRequestResolvedNotification,
+  unknown
 >
-const ErrorNotificationSchema = v.object({
+const ErrorNotificationSchema = z.object({
   error: TurnErrorSchema,
-  threadId: v.string(),
-  turnId: v.string(),
-  willRetry: v.boolean()
+  threadId: z.string(),
+  turnId: z.string(),
+  willRetry: z.boolean()
 })
 
-const parameterSchemas: Record<string, v.GenericSchema> = {
+const parameterSchemas: Record<string, z.ZodMiniType> = {
   error: ErrorNotificationSchema,
   'item/agentMessage/delta': DeltaSchema,
   'item/commandExecution/outputDelta': DeltaSchema,
@@ -278,12 +270,12 @@ const parameterSchemas: Record<string, v.GenericSchema> = {
 /**
  * Validate a native payload and normalize schema failures to PROTOCOL_ERROR.
  */
-export const parseProtocol = <T extends v.GenericSchema>(schema: T, value: unknown): v.InferOutput<T> => {
-  const result = v.safeParse(schema, value)
+export const parseProtocol = <T extends z.ZodMiniType>(schema: T, value: unknown): z.output<T> => {
+  const result = z.safeParse(schema, value)
   if (!result.success) {
     throw new RuntimeError('PROTOCOL_ERROR', 'Invalid app-server protocol frame')
   }
-  return result.output
+  return result.data
 }
 
 /**
@@ -318,29 +310,29 @@ export const parseResult = (method: string, value: Json): Json => {
     case 'turn/start':
       return parseProtocol(TurnResponseSchema, value)
     case 'turn/interrupt':
-      return parseProtocol(v.object({}), value)
+      return parseProtocol(z.object({}), value)
     default:
       return value
   }
 }
 
-export const ElicitationApprovalSchema = v.object({
-  message: v.string(),
-  mode: v.picklist(['form', 'openai/form', 'openaiForm']),
-  requestedSchema: v.object({
-    properties: v.strictObject({}),
-    required: v.optional(v.pipe(v.array(v.string()), v.maxLength(0))),
-    type: v.literal('object')
+export const ElicitationApprovalSchema = z.object({
+  message: z.string(),
+  mode: z.enum(['form', 'openai/form', 'openaiForm']),
+  requestedSchema: z.object({
+    properties: z.strictObject({}),
+    required: z.optional(z.array(z.string()).check(z.maxLength(0))),
+    type: z.literal('object')
   }),
-  serverName: v.literal('project_resources'),
-  threadId: v.string(),
-  turnId: v.nullable(v.string())
-}) satisfies v.GenericSchema<
-  unknown,
-  Pick<McpServerElicitationRequestParams, 'threadId' | 'turnId' | 'serverName' | 'mode' | 'message'>
+  serverName: z.literal('project_resources'),
+  threadId: z.string(),
+  turnId: z.nullable(z.string())
+}) satisfies z.ZodMiniType<
+  Pick<McpServerElicitationRequestParams, 'threadId' | 'turnId' | 'serverName' | 'mode' | 'message'>,
+  unknown
 >
-export const ElicitationResponseSchema = v.strictObject({
-  _meta: v.null(),
-  action: v.picklist(['accept', 'decline']),
-  content: v.nullable(v.strictObject({}))
-}) satisfies v.GenericSchema<unknown, McpServerElicitationRequestResponse>
+export const ElicitationResponseSchema = z.strictObject({
+  _meta: z.null(),
+  action: z.enum(['accept', 'decline']),
+  content: z.nullable(z.strictObject({}))
+}) satisfies z.ZodMiniType<McpServerElicitationRequestResponse, unknown>

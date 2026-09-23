@@ -1,12 +1,12 @@
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
 import { RuntimeError } from './errors'
 
 import type { Json, JsonObject } from './types'
 
-const NonEmptyStringSchema = v.pipe(v.string(), v.minLength(1))
+const NonEmptyStringSchema = z.string().check(z.minLength(1))
 export const SessionIdSchema = NonEmptyStringSchema
-export const ArchivedSchema = v.boolean()
+export const ArchivedSchema = z.boolean()
 
 /**
  * Check JSON compatibility while rejecting cycles and allowing repeated non-cyclic references.
@@ -40,14 +40,14 @@ const isJson = (value: unknown, visiting = new WeakSet<object>()): value is Json
   }
 }
 
-export const JsonObjectSchema = v.custom<JsonObject>(
+export const JsonObjectSchema = z.custom<JsonObject>(
   (value) => value !== null && !Array.isArray(value) && typeof value === 'object' && isJson(value)
 )
 
-export const InsertSessionInputSchema = v.strictObject({
+export const InsertSessionInputSchema = z.strictObject({
   cwd: NonEmptyStringSchema,
   id: NonEmptyStringSchema,
-  model: v.optional(v.nullable(NonEmptyStringSchema)),
+  model: z.optional(z.nullable(NonEmptyStringSchema)),
   nativeSessionId: NonEmptyStringSchema,
   options: JsonObjectSchema,
   projectId: NonEmptyStringSchema,
@@ -55,38 +55,35 @@ export const InsertSessionInputSchema = v.strictObject({
   title: NonEmptyStringSchema
 })
 
-export const PageInputSchema = v.strictObject({
-  cursor: v.optional(v.string()),
-  limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(200)), 50)
+export const PageInputSchema = z.strictObject({
+  cursor: z.optional(z.string()),
+  limit: z.prefault(z.int().check(z.minimum(1), z.maximum(200)), 50)
 })
 
-export const SessionFilterSchema = v.strictObject({
-  archived: v.optional(ArchivedSchema),
-  ...PageInputSchema.entries,
-  projectId: v.optional(NonEmptyStringSchema),
-  runtime: v.optional(NonEmptyStringSchema)
+export const SessionFilterSchema = z.strictObject({
+  archived: z.optional(ArchivedSchema),
+  ...PageInputSchema.shape,
+  projectId: z.optional(NonEmptyStringSchema),
+  runtime: z.optional(NonEmptyStringSchema)
 })
 
-export const CursorSchema = v.strictObject({
-  createdAt: v.pipe(v.string(), v.isoTimestamp()),
+export const CursorSchema = z.strictObject({
+  createdAt: z.iso.datetime({ offset: true }),
   id: NonEmptyStringSchema
 })
 
-export type InsertSessionInput = v.InferInput<typeof InsertSessionInputSchema>
-export type Cursor = v.InferOutput<typeof CursorSchema>
+export type InsertSessionInput = z.input<typeof InsertSessionInputSchema>
+export type Cursor = z.output<typeof CursorSchema>
 
 /**
- * Validate input with Valibot and expose a stable SDK validation error.
+ * Validate input with Zod Mini and expose a stable SDK validation error.
  *
  * @throws {@link RuntimeError} with INVALID_INPUT when validation fails.
  */
-export const parseInput = <TSchema extends v.GenericSchema>(
-  schema: TSchema,
-  input: unknown
-): v.InferOutput<TSchema> => {
-  const result = v.safeParse(schema, input)
+export const parseInput = <TSchema extends z.ZodMiniType>(schema: TSchema, input: unknown): z.output<TSchema> => {
+  const result = z.safeParse(schema, input)
   if (!result.success) {
     throw new RuntimeError('INVALID_INPUT', 'Invalid input')
   }
-  return result.output
+  return result.data
 }

@@ -4,11 +4,10 @@
   "type": "module",
   "scripts": {
     "start": "node main.ts",
-    "smoke": "pnpm -w build && node smoke.ts"
+    "smoke": "pnpm -w build && pnpm --filter @internal/server build && node smoke.ts"
   },
   "dependencies": {
     "@qingshaner/runtime": "workspace:*",
-    "@qingshaner/runtime-codex": "workspace:*",
     "@tanstack/ai-client": "0.32.0",
     "@qingshaner/runtime-contract": "workspace:*",
     "@orpc/client": "2.0.0-beta.36",

@@ -16,7 +16,7 @@ import {
   type RuntimeAdapter,
   RuntimeError
 } from '@qingshaner/runtime'
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
 import { version } from '../package.json'
 import { JsonRpcClient } from './client'
@@ -45,25 +45,25 @@ import type { ThreadResumeParams } from './schemas/v2/ThreadResumeParams'
 import type { ThreadStartParams } from './schemas/v2/ThreadStartParams'
 import type { TurnStartParams } from './schemas/v2/TurnStartParams'
 
-const nonempty = v.pipe(v.string(), v.trim(), v.minLength(1))
-const timeout = v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(2_147_483_647)))
-const OptionsSchema = v.strictObject({
-  codexHome: v.optional(nonempty),
-  dataDir: v.optional(nonempty),
-  executable: v.optional(v.strictObject({ args: v.optional(v.array(v.string())), command: nonempty })),
-  model: v.optional(nonempty),
+const nonempty = z.string().check(z.trim(), z.minLength(1))
+const timeout = z.optional(z.int().check(z.minimum(1), z.maximum(2_147_483_647)))
+const OptionsSchema = z.strictObject({
+  codexHome: z.optional(nonempty),
+  dataDir: z.optional(nonempty),
+  executable: z.optional(z.strictObject({ args: z.optional(z.array(z.string())), command: nonempty })),
+  model: z.optional(nonempty),
   requestTimeoutMs: timeout,
   shutdownTimeoutMs: timeout
 })
-const SessionOptionsSchema = v.strictObject({
-  approvalPolicy: v.optional(v.picklist(['on-request', 'never']), 'on-request'),
-  model: v.optional(nonempty),
-  sandbox: v.optional(v.picklist(['read-only', 'workspace-write']), 'workspace-write')
+const SessionOptionsSchema = z.strictObject({
+  approvalPolicy: z.prefault(z.enum(['on-request', 'never']), 'on-request'),
+  model: z.optional(nonempty),
+  sandbox: z.prefault(z.enum(['read-only', 'workspace-write']), 'workspace-write')
 })
 /** Codex settings persisted per session, independently of the common model. */
-export type CodexSessionOptions = Omit<v.InferInput<typeof SessionOptionsSchema>, 'model'>
+export type CodexSessionOptions = Omit<z.input<typeof SessionOptionsSchema>, 'model'>
 /** Process settings and an optional default model for direct adapter callers. */
-export type CodexRuntimeOptions = v.InferInput<typeof OptionsSchema>
+export type CodexRuntimeOptions = z.input<typeof OptionsSchema>
 type Notification = Extract<Frame, { kind: 'notification' }>
 type QueueEntry = { frame?: Notification; notice?: AdapterNotice; bytes: number; responseAttempted?: boolean }
 interface PendingResponse {
@@ -104,12 +104,12 @@ interface ActiveRun {
 /**
  * Validate native runtime input and report INVALID_INPUT on failure.
  */
-const validate = <T extends v.GenericSchema>(schema: T, value: unknown): v.InferOutput<T> => {
-  const result = v.safeParse(schema, value)
+const validate = <T extends z.ZodMiniType>(schema: T, value: unknown): z.output<T> => {
+  const result = z.safeParse(schema, value)
   if (!result.success) {
     throw new RuntimeError('INVALID_INPUT', 'Invalid Codex runtime input')
   }
-  return result.output
+  return result.data
 }
 /**
  * Preserve SDK faults and normalize other failures to ADAPTER_ERROR.
@@ -129,7 +129,7 @@ const failed = (error: RuntimeError): AdapterOutcome => {
  */
 export class CodexProcess implements RuntimeAdapter {
   readonly kind = 'codex'
-  private readonly options: v.InferOutput<typeof OptionsSchema>
+  private readonly options: z.output<typeof OptionsSchema>
   private client?: JsonRpcClient
   private starting?: Promise<JsonRpcClient>
   private disposed = false
@@ -231,7 +231,7 @@ export class CodexProcess implements RuntimeAdapter {
   ): Promise<AdapterOutcome> {
     this.checkOpen()
     validate(
-      v.strictObject({ context: v.optional(v.string()), runId: nonempty, sessionId: nonempty, text: nonempty }),
+      z.strictObject({ context: z.optional(z.string()), runId: nonempty, sessionId: nonempty, text: nonempty }),
       input
     )
     validate(nonempty, session.nativeSessionId)
@@ -501,8 +501,8 @@ export class CodexProcess implements RuntimeAdapter {
         await client.request('skills/extraRoots/set', {
           extraRoots: [...new Set((this.resources?.skillDirectories ?? []).map(dirname))]
         })
-        const schema = v.object({
-          data: v.array(v.object({ skills: v.array(v.object({ enabled: v.boolean(), path: v.string() })) }))
+        const schema = z.object({
+          data: z.array(z.object({ skills: z.array(z.object({ enabled: z.boolean(), path: z.string() })) }))
         })
         const inventory = parseProtocol(schema, await client.request('skills/list', { cwds: [cwd], forceReload: true }))
         for (const skill of inventory.data.flatMap((entry) => entry.skills)) {
@@ -525,10 +525,10 @@ export class CodexProcess implements RuntimeAdapter {
           throw new RuntimeError('RESOURCE_PREPARATION_FAILED', 'Unbound skills remain enabled')
         }
         const settings = parseProtocol(
-          v.object({
-            config: v.object({
+          z.object({
+            config: z.object({
               // biome-ignore lint/style/useNamingConvention: Native configuration key.
-              mcp_servers: v.optional(v.record(v.string(), v.unknown()), {})
+              mcp_servers: z.prefault(z.record(z.string(), z.unknown()), {})
             })
           }),
           await client.request('config/read', { cwd, includeLayers: false })
@@ -766,11 +766,11 @@ export class CodexProcess implements RuntimeAdapter {
     if (!this.resources) {
       return false
     }
-    const parsed = v.safeParse(ElicitationApprovalSchema, frame.params)
+    const parsed = z.safeParse(ElicitationApprovalSchema, frame.params)
     if (!parsed.success) {
       return false
     }
-    const params = parsed.output
+    const params = parsed.data
     const run = this.threads.get(params.threadId)
     if (
       !run ||

@@ -1,10 +1,10 @@
 import { type AdapterNotice, type AdapterOutcome, parseEvent, RuntimeError } from '@qingshaner/runtime'
 
-import type { InferOutput } from 'valibot'
+import type { output } from 'zod/mini'
 
 import { DeltaSchema, ItemNotificationSchema, type ItemSchema, parseProtocol } from './protocol'
 
-type Item = InferOutput<typeof ItemSchema>
+type Item = output<typeof ItemSchema>
 /**
  * Wrap a validated AG-UI event in an adapter notice.
  */

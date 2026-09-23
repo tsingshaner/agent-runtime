@@ -9,7 +9,7 @@ import { and, asc, defineRelations, desc, eq, getTableColumns, gt, inArray, sql 
 import { readMigrationFiles } from 'drizzle-orm/migrator'
 import { drizzle, type PgliteDatabase } from 'drizzle-orm/pglite'
 import { migrate } from 'drizzle-orm/pglite/migrator'
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
 import { parseEvent, startedEvent, type TerminalOutcome, terminalEvent } from './ag-ui'
 import { RuntimeError } from './errors'
@@ -50,31 +50,32 @@ import type {
   UpdateProjectInput
 } from './types'
 
-const DecisionSchema = v.picklist(['approve', 'deny'])
-const ApprovalRequestSchema = v.strictObject({
-  allowedDecisions: v.pipe(v.array(DecisionSchema), v.minLength(1)),
+const DecisionSchema = z.enum(['approve', 'deny'])
+const ApprovalRequestSchema = z.strictObject({
+  allowedDecisions: z.array(DecisionSchema).check(z.minLength(1)),
   detail: JsonObjectSchema,
-  kind: v.picklist(['command', 'file-change', 'tool']),
-  nativeRequestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())])
+  kind: z.enum(['command', 'file-change', 'tool']),
+  nativeRequestId: z.union([z.string(), z.int()])
 })
-const InputRequestSchema = v.strictObject({
-  nativeRequestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())]),
-  questions: v.pipe(
-    v.array(
-      v.strictObject({
-        header: v.string(),
+const InputRequestSchema = z.strictObject({
+  nativeRequestId: z.union([z.string(), z.int()]),
+  questions: z
+    .array(
+      z.strictObject({
+        header: z.string(),
         id: SessionIdSchema,
-        isOther: v.optional(v.boolean()),
-        isSecret: v.optional(v.boolean()),
-        options: v.optional(v.nullable(v.array(v.strictObject({ description: v.string(), label: SessionIdSchema })))),
+        isOther: z.optional(z.boolean()),
+        isSecret: z.optional(z.boolean()),
+        options: z.optional(z.nullable(z.array(z.strictObject({ description: z.string(), label: SessionIdSchema })))),
         question: SessionIdSchema
       })
-    ),
-    v.minLength(1),
-    v.check((questions) => new Set(questions.map(({ id }) => id)).size === questions.length)
-  )
+    )
+    .check(
+      z.minLength(1),
+      z.refine((questions) => new Set(questions.map(({ id }) => id)).size === questions.length)
+    )
 })
-const InputAnswersSchema = v.record(SessionIdSchema, v.pipe(v.array(SessionIdSchema), v.minLength(1)))
+const InputAnswersSchema = z.record(SessionIdSchema, z.array(SessionIdSchema).check(z.minLength(1)))
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url))
 const relations = defineRelations(schema)
 const activeStatuses = ['starting', 'running', 'waiting_approval', 'waiting_input', 'cancelling'] as const
@@ -816,12 +817,11 @@ export class SessionStore {
     request: Extract<AdapterNotice, { kind: 'approval-batch' }>['request']
   ): Promise<void> {
     const value = parseInput(
-      v.strictObject({
-        nativeRequestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())]),
-        requests: v.pipe(
-          v.array(ApprovalRequestSchema),
-          v.minLength(1),
-          v.check((items) => new Set(items.map((item) => JSON.stringify(item.nativeRequestId))).size === items.length)
+      z.strictObject({
+        nativeRequestId: z.union([z.string(), z.int()]),
+        requests: z.array(ApprovalRequestSchema).check(
+          z.minLength(1),
+          z.refine((items) => new Set(items.map((item) => JSON.stringify(item.nativeRequestId))).size === items.length)
         )
       }),
       request

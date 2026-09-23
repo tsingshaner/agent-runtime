@@ -8,34 +8,33 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ErrorCode, McpError as ProtocolError } from '@modelcontextprotocol/sdk/types.js'
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
 
 export { FileError as McpError } from '@internal/shared/files'
 
-const nonempty = v.pipe(v.string(), v.minLength(1))
-const variable = v.pipe(v.string(), v.regex(/^[A-Za-z_][A-Za-z0-9_]*$/))
+const nonempty = z.string().check(z.minLength(1))
+const variable = z.string().check(z.regex(/^[A-Za-z_][A-Za-z0-9_]*$/))
 const common = {
-  name: v.pipe(nonempty, v.regex(/^[a-zA-Z0-9_-]+$/)),
-  timeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(10), v.maxValue(120000)), 10000)
+  name: nonempty.check(z.regex(/^[a-zA-Z0-9_-]+$/)),
+  timeoutMs: z.prefault(z.int().check(z.minimum(10), z.maximum(120000)), 10000)
 }
-const configSchema = v.variant('transport', [
-  v.strictObject({
+const configSchema = z.discriminatedUnion('transport', [
+  z.strictObject({
     ...common,
-    args: v.optional(v.array(v.string()), []),
+    args: z.prefault(z.array(z.string()), []),
     command: nonempty,
-    cwd: v.optional(nonempty),
-    env: v.optional(v.record(variable, variable), {}),
-    transport: v.literal('stdio')
+    cwd: z.optional(nonempty),
+    env: z.prefault(z.record(variable, variable), {}),
+    transport: z.literal('stdio')
   }),
-  v.strictObject({
+  z.strictObject({
     ...common,
-    headers: v.optional(v.record(v.pipe(v.string(), v.regex(/^[A-Za-z0-9-]+$/)), variable), {}),
-    transport: v.literal('http'),
-    url: v.pipe(
-      v.string(),
-      v.check((value) => {
+    headers: z.prefault(z.record(z.string().check(z.regex(/^[A-Za-z0-9-]+$/)), variable), {}),
+    transport: z.literal('http'),
+    url: z.string().check(
+      z.refine((value) => {
         try {
           const url = new URL(value)
           return (
@@ -48,25 +47,25 @@ const configSchema = v.variant('transport', [
     )
   })
 ])
-export type McpConfig = v.InferInput<typeof configSchema>
-export type McpServer = v.InferOutput<typeof configSchema> & { id: string }
+export type McpConfig = z.input<typeof configSchema>
+export type McpServer = z.output<typeof configSchema> & { id: string }
 export interface McpConnection {
   check: () => Promise<void>
   tools: Tool[]
   callTool: (name: string, args: Record<string, unknown>) => Promise<CallToolResult>
   close: () => Promise<void>
 }
-const stateSchema = v.object({
-  bindings: v.record(nonempty, v.record(nonempty, v.boolean())),
-  configs: v.record(nonempty, configSchema)
+const stateSchema = z.object({
+  bindings: z.record(nonempty, z.record(nonempty, z.boolean())),
+  configs: z.record(nonempty, configSchema)
 })
-type State = v.InferOutput<typeof stateSchema>
-const parse = <S extends v.GenericSchema>(schema: S, input: unknown): v.InferOutput<S> => {
-  const result = v.safeParse(schema, input)
+type State = z.output<typeof stateSchema>
+const parse = <S extends z.ZodMiniType>(schema: S, input: unknown): z.output<S> => {
+  const result = z.safeParse(schema, input)
   if (!result.success) {
     throw new FileError('INVALID_INPUT', 'Invalid MCP input')
   }
-  return result.output
+  return result.data
 }
 const redact = <T>(value: T, secrets: string[]): T =>
   JSON.parse(
@@ -204,7 +203,7 @@ export class Mcp {
   bind = (projectId: string, id: string, enabled: boolean): Promise<void> =>
     this.mutate((state) => {
       parse(nonempty, projectId)
-      parse(v.boolean(), enabled)
+      parse(z.boolean(), enabled)
       this.lookup(state, id)
       const bindings = Object.hasOwn(state.bindings, projectId) ? state.bindings[projectId] : {}
       state.bindings = { ...state.bindings, [projectId]: { ...bindings, [id]: enabled } }
@@ -259,7 +258,7 @@ export class Mcp {
           throw new FileError('DISPOSED', 'MCP connection closed')
         }
         parse(nonempty, name)
-        parse(v.record(v.string(), v.unknown()), args)
+        parse(z.record(z.string(), z.unknown()), args)
         const owner = owners.get(name)
         if (!owner) {
           throw new FileError('TOOL_NOT_FOUND', 'MCP tool not found')

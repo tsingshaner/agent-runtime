@@ -6,26 +6,26 @@ import { OpenAPIGenerator } from '@orpc/openapi'
 import { OpenAPIHandler } from '@orpc/openapi/fetch'
 import { COMMON_ERROR_STATUS_MAP, ORPCError } from '@orpc/server'
 import { RequestLimitHandlerPlugin } from '@orpc/server/plugins'
-import { ValibotToJsonSchemaConverter } from '@orpc/valibot'
+import { ZodToJsonSchemaConverter } from '@orpc/zod'
 import { RuntimeManager } from '@qingshaner/runtime'
 import { contract, EventSchemas } from '@qingshaner/runtime-contract'
-import { serve } from 'srvx/node'
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 
 import { router, type ServiceOptions, safeError } from './router.ts'
 
-export type ServerOptions = ServiceOptions & { port?: number; origins?: string[] }
+export type ServerOptions = ServiceOptions & { origin: string; origins?: string[] }
 const generator = new OpenAPIGenerator({
   converters: [
-    new ValibotToJsonSchemaConverter(),
+    // AG-UI's Zod 3 schema must be handled before the Zod 4 converter.
     {
       condition: (schema) => schema === EventSchemas,
       convert: () => [
         zodToJsonSchema(EventSchemas as unknown as Parameters<typeof zodToJsonSchema>[0], { target: 'openApi3' }),
         false
       ]
-    }
+    },
+    new ZodToJsonSchemaConverter()
   ]
 })
 let spec: ReturnType<typeof generator.generate> | undefined
@@ -57,19 +57,19 @@ const handler = new OpenAPIHandler(router, {
     }
   ],
   plugins: [
-    new SmartCoercionHandlerPlugin({ converters: [new ValibotToJsonSchemaConverter({ cache: true })] }),
+    new SmartCoercionHandlerPlugin({ converters: [new ZodToJsonSchemaConverter({ cache: true })] }),
     new RequestLimitHandlerPlugin({ maxBodySize: 1024 * 1024 })
   ]
 })
 
-/** Shared by Nitro and the programmatic HTTP listener. Owns one Manager. */
+/** Fetch handler used by Nitro. Owns one Manager, but no listener. */
 export const createService = async (options: ServerOptions) => {
-  v.parse(
-    v.strictObject({
-      origins: v.optional(v.array(v.string())),
-      port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(65535)))
+  z.parse(
+    z.strictObject({
+      origin: z.url(),
+      origins: z.optional(z.array(z.string()))
     }),
-    { origins: options.origins, port: options.port }
+    { origin: options.origin, origins: options.origins }
   )
   const manager = await RuntimeManager.open({
     dataDir: options.dataDir,
@@ -81,7 +81,7 @@ export const createService = async (options: ServerOptions) => {
   const token = randomBytes(32).toString('hex')
   const expected = Buffer.from(`Bearer ${token}`)
   const shutdown = new AbortController()
-  let origin = ''
+  const origin = options.origin
   let closePromise: Promise<void> | undefined
   const close = () =>
     (closePromise ??= (async () => {
@@ -154,45 +154,6 @@ export const createService = async (options: ServerOptions) => {
   return {
     close,
     fetch: fetchRequest,
-    setOrigin: (value: string) => {
-      origin = value
-    },
     token
   }
-}
-
-/** Loopback listener for embedding and real HTTP tests; production uses Nitro. */
-export const startServer = async (options: ServerOptions) => {
-  const service = await createService(options)
-  const server = serve({
-    fetch: service.fetch,
-    gracefulShutdown: false,
-    hostname: '127.0.0.1',
-    node: { headersTimeout: 10000, requestTimeout: 15000 },
-    port: options.port ?? 0,
-    silent: true
-  })
-  try {
-    await server.ready()
-  } catch (error) {
-    await service.close()
-    throw error
-  }
-  const url = server.url?.replace(/\/$/, '')
-  if (!url) {
-    await server.close(true)
-    await service.close()
-    throw new Error('Missing listener address')
-  }
-  service.setOrigin(url)
-  let closing: Promise<void> | undefined
-  const close = () =>
-    (closing ??= (async () => {
-      const results = await Promise.allSettled([service.close(), server.close(true)])
-      const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason)
-      if (errors.length > 0) {
-        throw new AggregateError(errors, 'Server shutdown failed')
-      }
-    })())
-  return { close, token: service.token, url }
 }

@@ -1,22 +1,18 @@
 // cspell:ignore tencentdb
 // biome-ignore-all lint/style/useNamingConvention: Official SDK wire field names.
 import { MemoryClient } from '@tencentdb-agent-memory/memory-sdk-ts-v2'
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
-const nonBlank = v.pipe(
-  v.string(),
-  v.check((value) => value.trim().length > 0)
-)
-const count = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(200))
-const pageSchema = v.strictObject({
-  limit: v.optional(count, 50),
-  offset: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0)), 0)
+const nonBlank = z.string().check(z.refine((value) => value.trim().length > 0))
+const count = z.int().check(z.minimum(1), z.maximum(200))
+const pageSchema = z.strictObject({
+  limit: z.prefault(count, 50),
+  offset: z.prefault(z.int().check(z.minimum(0)), 0)
 })
-const optionsSchema = v.strictObject({
-  apiKeyEnv: v.pipe(v.string(), v.regex(/^[A-Za-z_][A-Za-z0-9_]*$/)),
-  endpoint: v.pipe(
-    v.string(),
-    v.check((value) => {
+const optionsSchema = z.strictObject({
+  apiKeyEnv: z.string().check(z.regex(/^[A-Za-z_][A-Za-z0-9_]*$/)),
+  endpoint: z.string().check(
+    z.refine((value) => {
       try {
         const url = new URL(value)
         return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
@@ -26,9 +22,9 @@ const optionsSchema = v.strictObject({
     })
   ),
   serviceId: nonBlank,
-  timeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(120000)), 5000)
+  timeoutMs: z.prefault(z.int().check(z.minimum(1), z.maximum(120000)), 5000)
 })
-export type ProjectMemoryOptions = v.InferInput<typeof optionsSchema>
+export type ProjectMemoryOptions = z.input<typeof optionsSchema>
 export interface MemoryConversation {
   projectId: string
   sessionId: string
@@ -50,17 +46,17 @@ export class MemoryError extends Error {
     this.name = 'MemoryError'
   }
 }
-const parse = <S extends v.GenericSchema>(schema: S, input: unknown): v.InferOutput<S> => {
-  const result = v.safeParse(schema, input)
+const parse = <S extends z.ZodMiniType>(schema: S, input: unknown): z.output<S> => {
+  const result = z.safeParse(schema, input)
   if (!result.success) {
     throw new MemoryError('INVALID_INPUT', 'Invalid memory input')
   }
-  return result.output
+  return result.data
 }
 
 /** Fixed-pair official SDK facade; project identity never depends on runtime kind. */
 export class ProjectMemory {
-  private readonly options: v.InferOutput<typeof optionsSchema>
+  private readonly options: z.output<typeof optionsSchema>
   constructor(options: ProjectMemoryOptions) {
     this.options = parse(optionsSchema, options)
   }
@@ -97,8 +93,8 @@ export class ProjectMemory {
   }
   write = async (input: MemoryConversation): Promise<MemoryReceipt> => {
     const value = parse(
-      v.strictObject({
-        assistant: v.string(),
+      z.strictObject({
+        assistant: z.string(),
         projectId: nonBlank,
         runId: nonBlank,
         sessionId: nonBlank,
@@ -124,7 +120,7 @@ export class ProjectMemory {
           { content: value.assistant, id: `${value.runId}:assistant`, role: 'assistant' }
         ]
       })
-      const acceptedIds = parse(v.pipe(v.array(nonBlank), v.length(2)), result.accepted_ids)
+      const acceptedIds = parse(z.array(nonBlank).check(z.length(2)), result.accepted_ids)
       return { ...source, acceptedIds, status: 'accepted' }
     } catch {
       return {
@@ -142,7 +138,7 @@ export class ProjectMemory {
     return this.request(() => this.client(projectId).queryConversation(input))
   }
   deleteConversations = (projectId: string, ids: string[]) => {
-    const message_ids = parse(v.pipe(v.array(nonBlank), v.minLength(1), v.maxLength(5000)), ids)
+    const message_ids = parse(z.array(nonBlank).check(z.minLength(1), z.maxLength(5000)), ids)
     return this.request(() => this.client(projectId).deleteConversation({ message_ids }))
   }
   query = (projectId: string, page: { limit?: number; offset?: number } = {}) => {
@@ -160,12 +156,12 @@ export class ProjectMemory {
     return this.request(() => this.client(projectId).updateAtomic({ content, id }))
   }
   delete = (projectId: string, ids: string[]) => {
-    parse(v.pipe(v.array(nonBlank), v.minLength(1), v.maxLength(5000)), ids)
+    parse(z.array(nonBlank).check(z.minLength(1), z.maxLength(5000)), ids)
     return this.request(() => this.client(projectId).deleteAtomic({ ids }))
   }
   readCore = (projectId: string) => this.request(() => this.client(projectId).readCore())
   writeCore = (projectId: string, content: string) => {
-    parse(v.string(), content)
+    parse(z.string(), content)
     return this.request(() => this.client(projectId).writeCore({ content }))
   }
   recall = (
@@ -175,9 +171,9 @@ export class ProjectMemory {
   ): Promise<{ context: string }> => {
     parse(nonBlank, query)
     const { limit, maxChars } = parse(
-      v.strictObject({
-        limit: v.optional(count, 5),
-        maxChars: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(32000)), 6000)
+      z.strictObject({
+        limit: z.prefault(count, 5),
+        maxChars: z.prefault(z.int().check(z.minimum(1), z.maximum(32000)), 6000)
       }),
       options
     )

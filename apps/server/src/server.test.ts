@@ -1,13 +1,12 @@
 import { mkdtemp, rm } from 'node:fs/promises'
-import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import * as v from 'valibot'
 import { afterEach, expect, test } from 'vitest'
+import * as z from 'zod/mini'
 
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
-import { startServer } from './index'
+import { openTestService } from '../test/service.fixture'
 
 let cleanup = async () => {}
 afterEach(async () => cleanup())
@@ -15,7 +14,8 @@ afterEach(async () => cleanup())
 test('authenticates HTTP clients and replays durable SSE without resubmitting a run', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'runtime-http-'))
   const adapter = new ManualAdapter()
-  const server = await startServer({ dataDir: directory, runtimes: [adapter] })
+  const server = await openTestService({ dataDir: directory, runtimes: [adapter] })
+  const fetch = server.fetch
   cleanup = async () => {
     await server.close()
     await rm(directory, { force: true, recursive: true })
@@ -38,8 +38,8 @@ test('authenticates HTTP clients and replays durable SSE without resubmitting a 
   const project = await (await request('/projects', 'POST', { name: 'HTTP' }))
     .json()
     .then((value) =>
-      v.parse(
-        v.looseObject({ id: v.optional(v.string()), runId: v.optional(v.string()), status: v.optional(v.string()) }),
+      z.parse(
+        z.looseObject({ id: z.optional(z.string()), runId: z.optional(z.string()), status: z.optional(z.string()) }),
         value
       )
     )
@@ -48,16 +48,16 @@ test('authenticates HTTP clients and replays durable SSE without resubmitting a 
   )
     .json()
     .then((value) =>
-      v.parse(
-        v.looseObject({ id: v.optional(v.string()), runId: v.optional(v.string()), status: v.optional(v.string()) }),
+      z.parse(
+        z.looseObject({ id: z.optional(z.string()), runId: z.optional(z.string()), status: z.optional(z.string()) }),
         value
       )
     )
   const run = await (await request(`/sessions/${session.id}/runs`, 'POST', { requestId: 'once', text: 'hello' }))
     .json()
     .then((value) =>
-      v.parse(
-        v.looseObject({ id: v.optional(v.string()), runId: v.optional(v.string()), status: v.optional(v.string()) }),
+      z.parse(
+        z.looseObject({ id: z.optional(z.string()), runId: z.optional(z.string()), status: z.optional(z.string()) }),
         value
       )
     )
@@ -70,7 +70,12 @@ test('authenticates HTTP clients and replays durable SSE without resubmitting a 
     throw new Error('Missing stream')
   }
   const reader = stream.body.getReader()
-  expect(new TextDecoder().decode((await reader.read()).value)).toContain('RUN_STARTED')
+  let started = ''
+  while (!started.includes('RUN_STARTED')) {
+    const chunk = await reader.read()
+    expect(chunk.done).toBe(false)
+    started += new TextDecoder().decode(chunk.value)
+  }
   await reader.cancel()
   expect(
     await (await request(`/sessions/${session.id}/runs`, 'POST', { requestId: 'once', text: 'hello' })).json()
@@ -79,8 +84,8 @@ test('authenticates HTTP clients and replays durable SSE without resubmitting a 
     kind: 'input',
     request: { nativeRequestId: 1, questions: [{ header: 'Q', id: 'q', question: 'Answer?' }] }
   })
-  const [input] = v.parse(
-    v.array(v.object({ id: v.string() })),
+  const [input] = z.parse(
+    z.array(z.object({ id: z.string() })),
     await (await request(`/runs/${run.runId}/inputs`)).json()
   )
   if (!input) {
@@ -91,8 +96,8 @@ test('authenticates HTTP clients and replays durable SSE without resubmitting a 
     kind: 'approval',
     request: { allowedDecisions: ['approve', 'deny'], detail: {}, kind: 'command', nativeRequestId: 2 }
   })
-  const [approval] = v.parse(
-    v.array(v.object({ id: v.string() })),
+  const [approval] = z.parse(
+    z.array(z.object({ id: z.string() })),
     await (await request(`/runs/${run.runId}/approvals`)).json()
   )
   if (!approval) {
@@ -107,13 +112,14 @@ test('authenticates HTTP clients and replays durable SSE without resubmitting a 
   expect((await request(`/runs/${run.runId}/events`, 'DELETE')).status).toBe(200)
   expect((await request(`/runs/${run.runId}/events`)).status).toBe(410)
   await server.close()
-  await expect(fetch(`${server.url}/health`)).rejects.toThrow()
+  expect((await request('/health')).status).toBe(503)
 }, 20000)
 
 test('rejects malformed requests and keeps subscribers independent during shutdown', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'runtime-http-security-'))
   const adapter = new ManualAdapter()
-  const server = await startServer({ dataDir: directory, origins: ['http://localhost:3000'], runtimes: [adapter] })
+  const server = await openTestService({ dataDir: directory, origins: ['http://localhost:3000'], runtimes: [adapter] })
+  const fetch = server.fetch
   cleanup = async () => {
     await server.close()
     await rm(directory, { force: true, recursive: true })
@@ -134,25 +140,14 @@ test('rejects malformed requests and keeps subscribers independent during shutdo
   expect((await fetch(`${server.url}/%GG`, { headers })).status).toBe(400)
   expect((await send('/projects', { extra: true, name: 'x' })).status).toBe(400)
   expect((await fetch(`${server.url}/projects`, { body: '{bad', headers, method: 'POST' })).status).toBe(400)
-  const wrongHost = await new Promise<number | undefined>((resolve, reject) => {
-    const request = httpRequest(
-      `${server.url}/health`,
-      { headers: { ...headers, host: 'evil.example' } },
-      (response) => {
-        response.resume()
-        resolve(response.statusCode)
-      }
-    )
-    request.on('error', reject).end()
-  })
-  expect(wrongHost).toBe(403)
-  const project = v.parse(v.object({ id: v.string() }), await (await send('/projects', { name: 'security' })).json())
-  const session = v.parse(
-    v.object({ id: v.string() }),
+  expect((await fetch(`${server.url}/health`, { headers: { ...headers, host: 'evil.example' } })).status).toBe(403)
+  const project = z.parse(z.object({ id: z.string() }), await (await send('/projects', { name: 'security' })).json())
+  const session = z.parse(
+    z.object({ id: z.string() }),
     await (await send('/sessions', { cwd: directory, model: 'test', projectId: project.id, runtime: 'manual' })).json()
   )
-  const run = v.parse(
-    v.object({ runId: v.string() }),
+  const run = z.parse(
+    z.object({ runId: z.string() }),
     await (await send(`/sessions/${session.id}/runs`, { text: 'wait' })).json()
   )
   await adapter.waitStarted(run.runId)
@@ -165,13 +160,13 @@ test('rejects malformed requests and keeps subscribers independent during shutdo
   const events = await fast.text()
   expect(events.match(/RUN_FINISHED/g)).toHaveLength(1)
   expect(await slow.text()).toBe(events)
-  const next = v.parse(
-    v.object({ runId: v.string() }),
+  const next = z.parse(
+    z.object({ runId: z.string() }),
     await (await send(`/sessions/${session.id}/runs`, { text: 'cancel on shutdown' })).json()
   )
   await adapter.waitStarted(next.runId)
   await fetch(`${server.url}/runs/${next.runId}/events`, { headers })
   await Promise.all([server.close(), server.close()])
-  const reopened = await startServer({ dataDir: directory, runtimes: [new ManualAdapter()] })
+  const reopened = await openTestService({ dataDir: directory, runtimes: [new ManualAdapter()] })
   await reopened.close()
 }, 20000)

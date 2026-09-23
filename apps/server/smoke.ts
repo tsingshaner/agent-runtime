@@ -5,18 +5,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { CodexRuntime } from '@qingshaner/runtime-codex'
-
-import { startServer } from './src/index.ts'
+import { launchNitro } from './test/nitro.fixture.ts'
 
 if (process.env.RUN_CODEX_SMOKE !== '1' || !process.env.CODEX_MODEL) {
   console.log('SKIPPED: set RUN_CODEX_SMOKE=1 and CODEX_MODEL for real HTTP/Codex smoke')
 } else {
   const directory = await mkdtemp(join(tmpdir(), 'http-codex-smoke-'))
-  const server = await startServer({
-    dataDir: join(directory, 'data'),
-    runtimes: [new CodexRuntime({ dataDir: join(directory, 'codex') })]
-  })
+  const server = await launchNitro(join(directory, 'data'))
   const request = async (path: string, body?: unknown) => {
     const response = await fetch(`${server.url}${path}`, {
       headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' },

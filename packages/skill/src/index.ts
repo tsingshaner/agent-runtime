@@ -3,8 +3,8 @@ import { cp, lstat, mkdir, readdir, realpath, rename, rm } from 'node:fs/promise
 import { join, relative } from 'node:path'
 
 import { atomicWrite, FileError, readRegularFile, resourcePath } from '@internal/shared/files'
-import * as v from 'valibot'
 import { parse as parseYaml } from 'yaml'
+import * as z from 'zod/mini'
 
 export { FileError as SkillError } from '@internal/shared/files'
 export interface Skill {
@@ -14,18 +14,18 @@ export interface Skill {
   directory: string
   enabled?: boolean
 }
-const key = v.pipe(v.string(), v.minLength(1))
-const stateSchema = v.object({
-  bindings: v.record(key, v.record(key, v.boolean())),
-  ids: v.array(v.pipe(v.string(), v.uuid()))
+const key = z.string().check(z.minLength(1))
+const stateSchema = z.object({
+  bindings: z.record(key, z.record(key, z.boolean())),
+  ids: z.array(z.uuid())
 })
-type State = v.InferOutput<typeof stateSchema>
-const parse = <S extends v.GenericSchema>(schema: S, input: unknown): v.InferOutput<S> => {
-  const result = v.safeParse(schema, input)
+type State = z.output<typeof stateSchema>
+const parse = <S extends z.ZodMiniType>(schema: S, input: unknown): z.output<S> => {
+  const result = z.safeParse(schema, input)
   if (!result.success) {
     throw new FileError('INVALID_INPUT', 'Invalid skill input')
   }
-  return result.output
+  return result.data
 }
 const metadata = (text: string): { name: string; description: string } => {
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1]
@@ -33,7 +33,7 @@ const metadata = (text: string): { name: string; description: string } => {
     if (!frontmatter) {
       throw new Error('Missing frontmatter')
     }
-    return v.parse(v.object({ description: key, name: key }), parseYaml(frontmatter))
+    return z.parse(z.object({ description: key, name: key }), parseYaml(frontmatter))
   } catch {
     throw new FileError('INVALID_SKILL', 'SKILL.md requires name and description frontmatter')
   }
@@ -91,7 +91,7 @@ export class Skills {
     return pending
   }
   private skillDirectory = async (id: string): Promise<string> => {
-    parse(v.pipe(v.string(), v.uuid()), id)
+    parse(z.uuid(), id)
     if (!(await this.load()).ids.includes(id)) {
       throw new FileError('NOT_FOUND', 'Skill not found')
     }
@@ -150,7 +150,7 @@ export class Skills {
   bind = (projectId: string, id: string, enabled: boolean): Promise<void> =>
     this.mutate(async (state) => {
       parse(key, projectId)
-      parse(v.boolean(), enabled)
+      parse(z.boolean(), enabled)
       await this.get(id)
       const bindings = Object.hasOwn(state.bindings, projectId) ? state.bindings[projectId] : {}
       state.bindings = { ...state.bindings, [projectId]: { ...bindings, [id]: enabled } }
@@ -158,7 +158,7 @@ export class Skills {
   unbind = (projectId: string, id: string): Promise<void> =>
     this.mutate((state) => {
       parse(key, projectId)
-      parse(v.pipe(v.string(), v.uuid()), id)
+      parse(z.uuid(), id)
       if (Object.hasOwn(state.bindings, projectId)) {
         delete state.bindings[projectId]?.[id]
       }
@@ -167,7 +167,7 @@ export class Skills {
     readRegularFile(await resourcePath(await this.skillDirectory(id), path))
   edit = (id: string, path: string, content: string): Promise<void> =>
     this.mutate(async () => {
-      parse(v.string(), content)
+      parse(z.string(), content)
       const target = await resourcePath(await this.skillDirectory(id), path)
       await readRegularFile(target)
       if (path === 'SKILL.md') {

@@ -25,7 +25,7 @@ displayed messages instead of appending another transcript. Aborting a subscript
 leaves the Run active; `cancel` explicitly cancels it.
 
 ```sh
-# Controlled real HTTP + PGlite, no model API or credentials:
+# Controlled Fetch handler + real PGlite, no listener or model credentials:
 pnpm exec vitest run examples/tanstack/client.test.ts
 # Explicit real model smoke:
 RUN_TANSTACK_SMOKE=1 CODEX_MODEL=gpt-6-astra pnpm --filter @internal/tanstack-example smoke
@@ -46,5 +46,5 @@ cancellation while an approval callback is still waiting. Interaction callbacks
 receive an AbortSignal and must use it to close prompts; late answers cannot be
 submitted after subscription teardown.
 
-The 2026-09-23 oRPC migration is verified by controlled HTTP tests; the historical
+The 2026-09-23 oRPC migration is verified by controlled Fetch-boundary tests; the historical
 real-model smoke above has not been rerun for the new transport.

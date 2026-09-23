@@ -1,69 +1,69 @@
 // biome-ignore-all lint/style/useNamingConvention: Memory gateway wire fields.
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
-export const text = v.pipe(v.string(), v.minLength(1))
-export const count = v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(Number.MAX_SAFE_INTEGER))
-export const page = v.strictObject({
-  cursor: v.optional(v.string()),
-  limit: v.optional(v.pipe(count, v.minValue(1), v.maxValue(200)))
+export const text = z.string().check(z.minLength(1))
+export const count = z.int().check(z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER))
+export const page = z.strictObject({
+  cursor: z.optional(z.string()),
+  limit: z.optional(count.check(z.minimum(1), z.maximum(200)))
 })
-export const memoryPage = v.strictObject({ limit: page.entries.limit, offset: v.optional(count) })
-export const content = v.strictObject({ content: v.string() })
-export const document = v.strictObject({ content: v.string(), path: text })
-export const ids = v.strictObject({ ids: v.pipe(v.array(text), v.minLength(1), v.maxLength(5000)) })
-const fault = v.object({ code: v.string(), message: v.string() })
+export const memoryPage = z.strictObject({ limit: page.shape.limit, offset: z.optional(count) })
+export const content = z.strictObject({ content: z.string() })
+export const document = z.strictObject({ content: z.string(), path: text })
+export const ids = z.strictObject({ ids: z.array(text).check(z.minLength(1), z.maxLength(5000)) })
+const fault = z.object({ code: z.string(), message: z.string() })
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
-const json: v.GenericSchema<Json> = v.lazy(() =>
-  v.union([v.null(), v.boolean(), v.number(), v.string(), v.array(json), v.record(v.string(), json)])
+const json: z.ZodMiniType<Json, Json> = z.lazy(() =>
+  z.union([z.null(), z.boolean(), z.number(), z.string(), z.array(json), z.record(z.string(), json)])
 )
-const jsonObject = v.record(v.string(), json)
-export const project = v.object({
-  createdAt: v.string(),
+const jsonObject = z.record(z.string(), json)
+export const project = z.object({
+  createdAt: z.string(),
   id: text,
-  name: v.string(),
-  updatedAt: v.string(),
-  workingDirectories: v.array(v.string())
+  name: z.string(),
+  updatedAt: z.string(),
+  workingDirectories: z.array(z.string())
 })
-export const projectCreate = v.strictObject({
-  id: v.optional(text),
+export const projectCreate = z.strictObject({
+  id: z.optional(text),
   name: text,
-  workingDirectories: v.optional(v.array(text))
+  workingDirectories: z.optional(z.array(text))
 })
-export const projectUpdate = v.strictObject({ name: v.optional(text), workingDirectories: v.optional(v.array(text)) })
-export const sessionCreate = v.strictObject({
+export const projectUpdate = z.strictObject({ name: z.optional(text), workingDirectories: z.optional(z.array(text)) })
+export const sessionCreate = z.strictObject({
   cwd: text,
   model: text,
-  options: v.optional(jsonObject),
+  options: z.optional(jsonObject),
   projectId: text,
   runtime: text,
-  title: v.optional(text)
+  title: z.optional(text)
 })
-export const session = v.object({
-  activeRunId: v.nullable(v.string()),
-  archived: v.boolean(),
-  createdAt: v.string(),
+export const session = z.object({
+  activeRunId: z.nullable(z.string()),
+  archived: z.boolean(),
+  createdAt: z.string(),
   cwd: text,
   id: text,
-  model: v.nullable(v.string()),
+  model: z.nullable(z.string()),
   nativeSessionId: text,
   options: jsonObject,
   projectId: text,
   runtime: text,
-  title: v.string(),
-  updatedAt: v.string()
+  title: z.string(),
+  updatedAt: z.string()
 })
-export const run = v.object({
-  createdAt: v.string(),
-  endedAt: v.nullable(v.string()),
-  error: v.nullable(fault),
-  eventsCleared: v.boolean(),
+export const run = z.object({
+  createdAt: z.string(),
+  endedAt: z.nullable(z.string()),
+  error: z.nullable(fault),
+  eventsCleared: z.boolean(),
   id: text,
   lastSequence: count,
-  memoryError: v.nullable(fault),
-  nativeTurnId: v.nullable(v.string()),
-  requestId: v.nullable(v.string()),
+  memoryError: z.nullable(fault),
+  nativeTurnId: z.nullable(z.string()),
+  requestId: z.nullable(z.string()),
   sessionId: text,
-  status: v.picklist([
+  status: z.enum([
     'starting',
     'running',
     'waiting_approval',
@@ -75,119 +75,119 @@ export const run = v.object({
     'interrupted'
   ])
 })
-export const decision = v.picklist(['approve', 'deny'])
-const interactionStatus = v.picklist(['pending', 'responding', 'resolved', 'expired'])
-export const approval = v.object({
-  allowedDecisions: v.array(decision),
-  batchId: v.nullable(v.string()),
-  batchIndex: v.nullable(count),
-  decision: v.nullable(decision),
+export const decision = z.enum(['approve', 'deny'])
+const interactionStatus = z.enum(['pending', 'responding', 'resolved', 'expired'])
+export const approval = z.object({
+  allowedDecisions: z.array(decision),
+  batchId: z.nullable(z.string()),
+  batchIndex: z.nullable(count),
+  decision: z.nullable(decision),
   detail: jsonObject,
   id: text,
-  kind: v.picklist(['command', 'file-change', 'tool']),
-  nativeRequestId: v.union([v.string(), v.number()]),
+  kind: z.enum(['command', 'file-change', 'tool']),
+  nativeRequestId: z.union([z.string(), z.number()]),
   runId: text,
-  status: v.union([interactionStatus, v.literal('decided')])
+  status: z.union([interactionStatus, z.literal('decided')])
 })
-export const answers = v.record(v.string(), v.array(v.string()))
-export const inputRequest = v.object({
-  answers: v.nullable(answers),
+export const answers = z.record(z.string(), z.array(z.string()))
+export const inputRequest = z.object({
+  answers: z.nullable(answers),
   id: text,
-  nativeRequestId: v.union([v.string(), v.number()]),
-  questions: v.array(
-    v.object({
-      header: v.string(),
+  nativeRequestId: z.union([z.string(), z.number()]),
+  questions: z.array(
+    z.object({
+      header: z.string(),
       id: text,
-      isOther: v.optional(v.boolean()),
-      isSecret: v.optional(v.boolean()),
-      options: v.optional(v.nullable(v.array(v.object({ description: v.string(), label: v.string() })))),
-      question: v.string()
+      isOther: z.optional(z.boolean()),
+      isSecret: z.optional(z.boolean()),
+      options: z.optional(z.nullable(z.array(z.object({ description: z.string(), label: z.string() })))),
+      question: z.string()
     })
   ),
   runId: text,
   status: interactionStatus
 })
-export const memoryWrite = v.object({
-  assistant: v.string(),
-  error: v.nullable(fault),
+export const memoryWrite = z.object({
+  assistant: z.string(),
+  error: z.nullable(fault),
   projectId: text,
   runId: text,
   sessionId: text,
-  status: v.picklist(['pending', 'accepted', 'failed', 'unknown']),
-  user: v.string()
+  status: z.enum(['pending', 'accepted', 'failed', 'unknown']),
+  user: z.string()
 })
-export const skill = v.object({
-  description: v.string(),
-  directory: v.string(),
-  enabled: v.optional(v.boolean()),
+export const skill = z.object({
+  description: z.string(),
+  directory: z.string(),
+  enabled: z.optional(z.boolean()),
   id: text,
-  name: v.string()
+  name: z.string()
 })
-const variable = v.pipe(v.string(), v.regex(/^[A-Za-z_][A-Za-z0-9_]*$/))
+const variable = z.string().check(z.regex(/^[A-Za-z_][A-Za-z0-9_]*$/))
 const mcpCommon = {
-  name: v.pipe(text, v.regex(/^[a-zA-Z0-9_-]+$/)),
-  timeoutMs: v.optional(v.pipe(count, v.minValue(10), v.maxValue(120000)), 10000)
+  name: text.check(z.regex(/^[a-zA-Z0-9_-]+$/)),
+  timeoutMs: z.prefault(count.check(z.minimum(10), z.maximum(120000)), 10000)
 }
 const stdio = {
   ...mcpCommon,
-  args: v.optional(v.array(v.string()), []),
+  args: z.prefault(z.array(z.string()), []),
   command: text,
-  cwd: v.optional(text),
-  env: v.optional(v.record(variable, variable), {}),
-  transport: v.literal('stdio')
+  cwd: z.optional(text),
+  env: z.prefault(z.record(variable, variable), {}),
+  transport: z.literal('stdio')
 }
 const http = {
   ...mcpCommon,
-  headers: v.optional(v.record(text, variable), {}),
-  transport: v.literal('http'),
-  url: v.pipe(v.string(), v.url())
+  headers: z.prefault(z.record(text, variable), {}),
+  transport: z.literal('http'),
+  url: z.url()
 }
-export const mcpConfig = v.variant('transport', [v.strictObject(stdio), v.strictObject(http)])
-const resourceId = { enabled: v.optional(v.boolean()), id: text }
-export const mcpServer = v.variant('transport', [
-  v.object({ ...stdio, ...resourceId }),
-  v.object({ ...http, ...resourceId })
+export const mcpConfig = z.discriminatedUnion('transport', [z.strictObject(stdio), z.strictObject(http)])
+const resourceId = { enabled: z.optional(z.boolean()), id: text }
+export const mcpServer = z.discriminatedUnion('transport', [
+  z.object({ ...stdio, ...resourceId }),
+  z.object({ ...http, ...resourceId })
 ])
-export const tool = v.looseObject({
-  description: v.optional(v.string()),
-  inputSchema: v.looseObject({ type: v.literal('object') }),
+export const tool = z.looseObject({
+  description: z.optional(z.string()),
+  inputSchema: z.looseObject({ type: z.literal('object') }),
   name: text
 })
-export const coreStatus = v.object({
-  endpoint: v.string(),
-  error: v.optional(fault),
-  owned: v.boolean(),
-  phase: v.picklist(['not_installed', 'stopped', 'starting', 'running', 'failed']),
-  version: v.string()
+export const coreStatus = z.object({
+  endpoint: z.string(),
+  error: z.optional(fault),
+  owned: z.boolean(),
+  phase: z.enum(['not_installed', 'stopped', 'starting', 'running', 'failed']),
+  version: z.string()
 })
-const atomic = v.object({
-  background: v.optional(v.string()),
-  content: v.string(),
-  created_at: v.string(),
+const atomic = z.object({
+  background: z.optional(z.string()),
+  content: z.string(),
+  created_at: z.string(),
   id: text,
-  type: v.string(),
-  updated_at: v.string()
+  type: z.string(),
+  updated_at: z.string()
 })
-export const atomicPage = v.object({ items: v.array(atomic), total: count })
-export const atomicSearch = v.object({ items: v.array(v.object({ ...atomic.entries, score: v.number() })) })
-export const atomicUpdate = v.object({ id: text, updated_at: v.string() })
-export const deleted = v.object({ deleted_count: count })
-export const conversations = v.object({
-  messages: v.array(
-    v.object({
-      content: v.string(),
-      id: v.optional(v.string()),
-      role: v.picklist(['user', 'assistant', 'system']),
-      timestamp: v.optional(v.string())
+export const atomicPage = z.object({ items: z.array(atomic), total: count })
+export const atomicSearch = z.object({ items: z.array(z.object({ ...atomic.shape, score: z.number() })) })
+export const atomicUpdate = z.object({ id: text, updated_at: z.string() })
+export const deleted = z.object({ deleted_count: count })
+export const conversations = z.object({
+  messages: z.array(
+    z.object({
+      content: z.string(),
+      id: z.optional(z.string()),
+      role: z.enum(['user', 'assistant', 'system']),
+      timestamp: z.optional(z.string())
     })
   ),
   total: count
 })
-export const core = v.object({
-  content: v.nullable(v.string()),
-  created_at: v.nullable(v.string()),
-  updated_at: v.nullable(v.string())
+export const core = z.object({
+  content: z.nullable(z.string()),
+  created_at: z.nullable(z.string()),
+  updated_at: z.nullable(z.string())
 })
-export const coreUpdated = v.object({ updated_at: v.string() })
-export const paged = <S extends v.GenericSchema>(item: S) =>
-  v.object({ items: v.array(item), nextCursor: v.nullable(v.string()) })
+export const coreUpdated = z.object({ updated_at: z.string() })
+export const paged = <S extends z.ZodMiniType>(item: S) =>
+  z.object({ items: z.array(item), nextCursor: z.nullable(z.string()) })

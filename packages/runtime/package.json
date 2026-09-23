@@ -3,11 +3,11 @@
     "@ag-ui/core": "0.0.59",
     "@electric-sql/pglite": "0.5.8",
     "drizzle-orm": "1.0.0-rc.4",
-    "valibot": "1.5.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@qingshaner/knowledge": "workspace:*",
     "@qingshaner/skill": "workspace:*",
-    "@qingshaner/mcp": "workspace:*"
+    "@qingshaner/mcp": "workspace:*",
+    "zod": "4.6.5"
   },
   "description": "Agent runtime core",
   "devDependencies": {

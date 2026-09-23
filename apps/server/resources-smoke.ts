@@ -1,3 +1,4 @@
+// biome-ignore-all lint/style/useNamingConvention: Process environment variables.
 // biome-ignore-all lint/suspicious/noMisplacedAssertion: Standalone opt-in smoke uses Node assertions.
 // biome-ignore-all lint/suspicious/noConsole: Explicit real smoke output.
 import assert from 'node:assert/strict'
@@ -6,14 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-import { Knowledge } from '@qingshaner/knowledge'
-import { Mcp } from '@qingshaner/mcp'
-import { MemoryCoreService, ProjectMemory } from '@qingshaner/memory'
-import { ProjectResources } from '@qingshaner/runtime'
-import { CodexRuntime } from '@qingshaner/runtime-codex'
-import { Skills } from '@qingshaner/skill'
-
-import { startServer } from './src/index.ts'
+import { launchNitro } from './test/nitro.fixture.ts'
 
 if (process.env.RUN_HTTP_RESOURCE_SMOKE !== '1' || !process.env.CODEX_MODEL) {
   throw new Error('Explicit RUN_HTTP_RESOURCE_SMOKE=1 and CODEX_MODEL required')
@@ -26,28 +20,15 @@ assert(
 )
 const dir = await mkdtemp(join(tmpdir(), 'http-resource-smoke-'))
 const endpoint = 'http://127.0.0.1:18435'
-const credential = `HTTP_MEMORY_${randomUUID().replaceAll('-', '')}`
-process.env[credential] = randomUUID()
-const serviceId = 'http-resource-smoke'
 const projectId = randomUUID()
-const mcp = await Mcp.open(join(dir, 'mcp'))
-const core = new MemoryCoreService({
-  directory: process.env.MEMORY_SERVICE_DIR,
-  endpoint,
-  gatewayApiKeyEnv: credential,
-  model: { apiKeyEnv: 'DEEPSEEK_API_KEY', baseUrl: process.env.DEEPSEEK_BASE_URL, name: process.env.MEMORY_MODEL },
-  serviceId
-})
-const server = await startServer({
-  dataDir: join(dir, 'db'),
-  memory: new ProjectMemory({ apiKeyEnv: credential, endpoint, serviceId }),
-  memoryCore: core,
-  resources: new ProjectResources({
-    knowledge: await Knowledge.open(join(dir, 'knowledge')),
-    mcp,
-    skills: await Skills.open(join(dir, 'skills'))
-  }),
-  runtimes: [new CodexRuntime({ dataDir: join(dir, 'codex'), requestTimeoutMs: 120000 })]
+const server = await launchNitro(join(dir, 'db'), {
+  MEMORY_API_KEY: randomUUID(),
+  MEMORY_BASE_URL: process.env.DEEPSEEK_BASE_URL,
+  MEMORY_ENDPOINT: endpoint,
+  MEMORY_MODEL: process.env.MEMORY_MODEL,
+  MEMORY_MODEL_API_KEY_ENV: 'DEEPSEEK_API_KEY',
+  MEMORY_SERVICE_DIR: process.env.MEMORY_SERVICE_DIR,
+  MEMORY_SERVICE_ID: 'http-resource-smoke'
 })
 const response = (path: string, method = 'GET', body?: unknown) =>
   fetch(server.url + path, {
@@ -164,7 +145,5 @@ try {
   )
 } finally {
   await server.close()
-  await mcp.dispose()
-  delete process.env[credential]
   await rm(dir, { force: true, recursive: true })
 }

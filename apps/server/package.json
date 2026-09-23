@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "pnpm --workspace-root build && pnpm build && NITRO_HOST=127.0.0.1 NITRO_PORT=${PORT:-4310} node .output/server/index.mjs",
-    "smoke": "pnpm --workspace-root build && node smoke.ts",
-    "smoke:resources": "pnpm --workspace-root build && node --env-file-if-exists=../../.env.local resources-smoke.ts",
+    "smoke": "pnpm --workspace-root build && pnpm build && node smoke.ts",
+    "smoke:resources": "pnpm --workspace-root build && pnpm build && node --env-file-if-exists=../../.env.local resources-smoke.ts",
     "build": "nitro build",
     "smoke:nitro": "pnpm --workspace-root build && pnpm build && node nitro-smoke.ts"
   },
@@ -13,7 +13,6 @@
     "@orpc/json-schema": "2.0.0-beta.36",
     "@orpc/openapi": "2.0.0-beta.36",
     "@orpc/server": "2.0.0-beta.36",
-    "@orpc/valibot": "2.0.0-beta.36",
     "@qingshaner/knowledge": "workspace:*",
     "@qingshaner/mcp": "workspace:*",
     "@qingshaner/memory": "workspace:*",
@@ -22,9 +21,8 @@
     "@qingshaner/runtime-contract": "workspace:*",
     "@qingshaner/skill": "workspace:*",
     "nitro": "3.0.260903-beta",
-    "srvx": "1.0.5",
-    "valibot": "1.5.0",
     "zod-to-json-schema": "3.25.2",
-    "zod": "3.25.76"
+    "zod": "4.6.5",
+    "@orpc/zod": "2.0.0-beta.36"
   }
 }

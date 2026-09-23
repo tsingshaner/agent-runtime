@@ -5,14 +5,15 @@ import { join } from 'node:path'
 import { parseEvent } from '@qingshaner/runtime'
 import { expect, test } from 'vitest'
 
-import { startServer } from '../../apps/server/src/index'
+import { openTestService } from '../../apps/server/test/service.fixture'
 import { ManualAdapter } from '../../packages/runtime/test/manual-adapter'
 import { RuntimeClient } from './client'
 
 test('official SSE client reconnects with GET, renders once, and answers durable interactions', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tanstack-client-'))
   const adapter = new ManualAdapter()
-  const server = await startServer({ dataDir: dir, runtimes: [adapter] })
+  const server = await openTestService({ dataDir: dir, runtimes: [adapter] })
+  const fetch = server.fetch
   const requests: { method: string; cursor: string | null }[] = []
   let dropped = false
   const fetchClient: typeof fetch = async (url, init) => {
@@ -27,7 +28,15 @@ test('official SSE client reconnects with GET, renders once, and answers durable
       return new Response(
         new ReadableStream({
           start: async (controller) => {
-            controller.enqueue((await reader.read()).value)
+            let started = ''
+            while (!started.includes('RUN_STARTED')) {
+              const chunk = await reader.read()
+              if (chunk.done) {
+                throw new Error('Stream closed before RUN_STARTED')
+              }
+              controller.enqueue(chunk.value)
+              started += new TextDecoder().decode(chunk.value)
+            }
             controller.close()
             await reader.cancel()
           }

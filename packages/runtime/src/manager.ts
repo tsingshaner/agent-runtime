@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
 import { parseEvent } from './ag-ui'
 import { RuntimeError } from './errors'
@@ -33,39 +33,31 @@ import type {
   UpdateProjectInput
 } from './types'
 
-const NonBlankString = v.pipe(
-  v.string(),
-  v.check((value) => value.trim().length > 0)
-)
-const TitleSchema = v.pipe(NonBlankString, v.maxLength(256))
-const CreateSessionSchema = v.strictObject({
+const NonBlankString = z.string().check(z.refine((value) => value.trim().length > 0))
+const TitleSchema = NonBlankString.check(z.maxLength(256))
+const CreateSessionSchema = z.strictObject({
   cwd: NonBlankString,
   model: NonBlankString,
-  options: v.optional(
-    v.pipe(
-      JsonObjectSchema,
-      v.check((value) => !Object.hasOwn(value, 'model'))
-    )
-  ),
+  options: z.optional(JsonObjectSchema.check(z.refine((value) => !Object.hasOwn(value, 'model')))),
   projectId: NonBlankString,
   runtime: NonBlankString,
-  title: v.optional(TitleSchema)
+  title: z.optional(TitleSchema)
 })
-const RunInputSchema = v.strictObject({ requestId: v.optional(NonBlankString), text: NonBlankString })
-const ManagerOptionsSchema = v.strictObject({
+const RunInputSchema = z.strictObject({ requestId: z.optional(NonBlankString), text: NonBlankString })
+const ManagerOptionsSchema = z.strictObject({
   dataDir: NonBlankString,
-  memory: v.optional(
-    v.custom<MemoryProvider>(
+  memory: z.optional(
+    z.custom<MemoryProvider>(
       (value) =>
         value !== null &&
         typeof value === 'object' &&
         ['recall', 'write'].every((key) => typeof Reflect.get(value, key) === 'function')
     )
   ),
-  memoryTimeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(120000)), 5000),
-  resources: v.optional(v.instance(ProjectResources)),
-  runtimes: v.array(
-    v.custom<RuntimeAdapter>((value) => {
+  memoryTimeoutMs: z.prefault(z.int().check(z.minimum(1), z.maximum(120000)), 5000),
+  resources: z.optional(z.instanceof(ProjectResources)),
+  runtimes: z.array(
+    z.custom<RuntimeAdapter>((value) => {
       if (value === null || typeof value !== 'object') {
         return false
       }
@@ -146,10 +138,10 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     this.assertProjectReady('')
     return await this.control(async () => {
       const value = parseInput(
-        v.strictObject({
-          id: v.optional(NonBlankString),
+        z.strictObject({
+          id: z.optional(NonBlankString),
           name: TitleSchema,
-          workingDirectories: v.optional(v.array(NonBlankString), [])
+          workingDirectories: z.prefault(z.array(NonBlankString), [])
         }),
         input
       )
@@ -176,7 +168,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
   async updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
     return await this.control(async () => {
       const value = parseInput(
-        v.strictObject({ name: v.optional(TitleSchema), workingDirectories: v.optional(v.array(NonBlankString)) }),
+        z.strictObject({ name: z.optional(TitleSchema), workingDirectories: z.optional(z.array(NonBlankString)) }),
         input
       )
       const workingDirectories =
@@ -820,7 +812,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     }
     try {
       const recalled = await this.memoryRequest(() => memory.recall(projectId, text))
-      return parseInput(v.pipe(v.string(), v.maxLength(32000)), recalled.context)
+      return parseInput(z.string().check(z.maxLength(32000)), recalled.context)
     } catch {
       await this.storage(() =>
         this.store.setMemoryError(runId, {
@@ -903,7 +895,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     try {
       const { projectId, sessionId, runId, user, assistant } = record
       const receipt = await this.memoryRequest(() => memory.write({ assistant, projectId, runId, sessionId, user }))
-      const status = parseInput(v.picklist(['accepted', 'failed', 'unknown']), receipt.status)
+      const status = parseInput(z.enum(['accepted', 'failed', 'unknown']), receipt.status)
       result = {
         error:
           status === 'accepted'

@@ -2,18 +2,18 @@ import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 
 import { atomicWrite, FileError as KnowledgeError, readRegularFile as read, resourcePath } from '@internal/shared/files'
-import * as v from 'valibot'
+import * as z from 'zod/mini'
 
 export { FileError as KnowledgeError } from '@internal/shared/files'
 
-const nonempty = v.pipe(v.string(), v.minLength(1), v.maxLength(4096))
-const bindingSchema = v.record(nonempty, nonempty)
-const validate = <S extends v.GenericSchema>(schema: S, value: unknown): v.InferOutput<S> => {
-  const result = v.safeParse(schema, value)
+const nonempty = z.string().check(z.minLength(1), z.maxLength(4096))
+const bindingSchema = z.record(nonempty, nonempty)
+const validate = <S extends z.ZodMiniType>(schema: S, value: unknown): z.output<S> => {
+  const result = z.safeParse(schema, value)
   if (!result.success) {
     throw new KnowledgeError('INVALID_INPUT', 'Invalid knowledge input')
   }
-  return result.output
+  return result.data
 }
 /** Markdown operations on explicitly bound local directories; no runtime dependency. */
 export class Knowledge {
@@ -136,12 +136,12 @@ export class Knowledge {
   read = async (projectId: string, path: string): Promise<string> => read(await this.path(projectId, path))
   create = (projectId: string, path: string, content: string): Promise<void> =>
     this.exclusive(async () => {
-      validate(v.string(), content)
+      validate(z.string(), content)
       await atomicWrite(await this.path(projectId, path), content, true)
     })
   edit = (projectId: string, path: string, content: string): Promise<void> =>
     this.exclusive(async () => {
-      validate(v.string(), content)
+      validate(z.string(), content)
       const target = await this.path(projectId, path)
       await read(target)
       await atomicWrite(target, content)
@@ -154,7 +154,7 @@ export class Knowledge {
     })
   search = async (projectId: string, query: string, limit = 20): Promise<{ path: string; excerpt: string }[]> => {
     validate(nonempty, query)
-    validate(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100)), limit)
+    validate(z.int().check(z.minimum(1), z.maximum(100)), limit)
     const matches: { path: string; excerpt: string }[] = []
     for (const path of await this.list(projectId)) {
       const content = await this.read(projectId, path)

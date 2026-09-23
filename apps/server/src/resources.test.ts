@@ -10,7 +10,7 @@ import { Skills } from '@qingshaner/skill'
 import { expect, test } from 'vitest'
 
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
-import { startServer } from './index'
+import { openTestService } from '../test/service.fixture'
 
 test('manages resources behind authentication, preserves imports and exposes safe memory failures', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'http-resources-'))
@@ -27,7 +27,7 @@ test('manages resources behind authentication, preserves imports and exposes saf
     serviceId: 'test'
   })
   const adapter = new Adapter()
-  const server = await startServer({
+  const server = await openTestService({
     dataDir: join(dir, 'db'),
     memory: new ProjectMemory({
       apiKeyEnv: 'HTTP_MEMORY_TEST',
@@ -39,6 +39,7 @@ test('manages resources behind authentication, preserves imports and exposes saf
     resources: new ProjectResources({ knowledge, mcp, skills }),
     runtimes: [adapter]
   })
+  const fetch = server.fetch
   const request = (path: string, method = 'GET', body?: unknown) =>
     fetch(server.url + path, {
       headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' },

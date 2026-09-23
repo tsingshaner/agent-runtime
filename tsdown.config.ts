@@ -31,7 +31,7 @@ export default defineConfig(
         '@qingshaner/utility',
         'drizzle-orm',
         'es-toolkit',
-        'valibot',
+        /^zod(?:\/|$)/,
         'yaml',
         /^@modelcontextprotocol\/sdk/,
         '@tencentdb-agent-memory/memory-sdk-ts-v2'

@@ -27,7 +27,7 @@ const openConfiguredService = async () => {
   const memoryCore =
     process.env.MEMORY_MODEL && process.env.MEMORY_BASE_URL
       ? new MemoryCoreService({
-          directory: join(dataDir, 'memory-core'),
+          directory: resolve(process.env.MEMORY_SERVICE_DIR ?? join(dataDir, 'memory-core')),
           endpoint,
           gatewayApiKeyEnv: 'MEMORY_API_KEY',
           model: {
@@ -42,7 +42,7 @@ const openConfiguredService = async () => {
     dataDir,
     memory,
     memoryCore,
-    port: Number(process.env.NITRO_PORT ?? process.env.PORT ?? 4310),
+    origin: `http://127.0.0.1:${Number(process.env.NITRO_PORT ?? process.env.PORT ?? 4310)}`,
     resources,
     runtimes: [new CodexRuntime({ dataDir: join(dataDir, 'codex') })]
   })
@@ -58,7 +58,6 @@ const openConfiguredService = async () => {
     await server.close().finally(() => mcp.dispose())
     throw error
   }
-  server.setOrigin(`http://127.0.0.1:${Number(process.env.NITRO_PORT ?? process.env.PORT ?? 4310)}`)
   let closing: Promise<void> | undefined
   const close = () => (closing ??= server.close().finally(() => mcp.dispose()))
   return { close, fetch: server.fetch }

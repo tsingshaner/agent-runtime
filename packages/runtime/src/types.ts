@@ -20,7 +20,7 @@ export type JsonObject = { [key: string]: Json }
  */
 export type ApprovalDecision = 'approve' | 'deny'
 /**
- * Persisted run lifecycle; interrupted marks unfinished work recovered after restart.
+ * Persisted run lifecycle; interrupted marks unsafe native termination or unfinished work recovered after restart.
  */
 export type RunStatus =
   | 'starting'
@@ -224,7 +224,7 @@ export type AdapterNotice =
 export interface AdapterOutcome {
   /** Only the final assistant reply, excluding commentary and tool output. */
   finalReply?: string
-  status: 'succeeded' | 'failed' | 'cancelled'
+  status: 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
   error?: RuntimeFault
 }
 

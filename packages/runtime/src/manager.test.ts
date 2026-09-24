@@ -93,6 +93,29 @@ describe('RuntimeManager operations', () => {
     await Promise.all(runs.map(({ runId }) => collect(manager.subscribe(runId))))
   })
 
+  test('preserves a native interruption after cancellation without affecting another run', async () => {
+    const first = await create()
+    const second = await create()
+    const interrupted = await manager.run(first.id, { text: 'one' })
+    const other = await manager.run(second.id, { text: 'two' })
+    await Promise.all([adapter.waitStarted(interrupted.runId), adapter.waitStarted(other.runId)])
+    adapter.finishOnCancel = false
+
+    await manager.cancel(interrupted.runId)
+    adapter.finish(interrupted.runId, {
+      error: { code: 'INTERRUPTED', message: 'Native cancellation failed; owned process stopped' },
+      status: 'interrupted'
+    })
+    const events = await collect(manager.subscribe(interrupted.runId))
+
+    expect(await manager.getRun(interrupted.runId)).toMatchObject({ status: 'interrupted' })
+    expect(events.filter(({ event }) => event.type === EventType.RUN_ERROR)).toHaveLength(1)
+    expect(events.at(-1)?.event).toMatchObject({ code: 'INTERRUPTED', type: EventType.RUN_ERROR })
+    expect((await manager.getSession(second.id)).activeRunId).toBe(other.runId)
+    adapter.finish(other.runId, { status: 'succeeded' })
+    await collect(manager.subscribe(other.runId))
+  })
+
   test('persists native turn and emitted events before acknowledging delivery', async () => {
     const session = await create()
     const { runId } = await manager.run(session.id, { text: '  hello\nworld  ' })

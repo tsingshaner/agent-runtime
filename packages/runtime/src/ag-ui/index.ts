@@ -1,11 +1,11 @@
 import { EventSchemas, EventType } from '@ag-ui/core'
 
-import type { AdapterOutcome, AgUiEvent, RuntimeFault } from '../types'
+import type { AdapterOutcome, AgUiEvent } from '../types'
 
 /**
  * A native terminal outcome or an interruption discovered during recovery.
  */
-export type TerminalOutcome = AdapterOutcome | { status: 'interrupted'; error: RuntimeFault }
+export type TerminalOutcome = AdapterOutcome
 
 /**
  * Validate a value against the AG-UI event schemas.

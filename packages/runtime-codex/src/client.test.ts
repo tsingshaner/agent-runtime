@@ -1,14 +1,17 @@
+import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer, type Socket } from 'node:net'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { JsonRpcClient } from './client'
 
 import type { Frame } from './protocol'
+
+vi.mock('node:child_process', { spy: true })
 
 const fakePath = fileURLToPath(new URL('../test/fake-app-server.mjs', import.meta.url))
 const cleanup: (() => Promise<void>)[] = []
@@ -221,10 +224,13 @@ describe('JsonRpcClient', () => {
   })
 
   test('rejects buffered small replies when the peer closes stdin before completion', async () => {
+    const spawnSpy = vi.mocked(spawn)
+    spawnSpy.mockClear()
     const { client, command } = await peer()
     await command({ action: 'pause' })
     // Observe the real pipe only; no stream methods are replaced or production test APIs added.
-    const { stdin } = Reflect.get(client, 'child') as ChildProcessWithoutNullStreams
+    const child = spawnSpy.mock.results[0]?.value as ChildProcessWithoutNullStreams
+    const { stdin } = child
     const replies: Promise<{ status: string; code?: string }>[] = []
     let resolvedWhileBuffered = false
     for (let batch = 0; batch < 16 && stdin.writableLength === 0; batch++) {

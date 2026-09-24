@@ -1,6 +1,6 @@
 import { definePlugin } from 'nitro'
 
-import { configuredService } from './main.ts'
+import { configuredService } from '../infra/service.ts'
 
 export default definePlugin(async (app) => {
   const service = await configuredService()

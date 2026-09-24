@@ -8,8 +8,8 @@ import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-/** Launch the production Nitro build for HTTP smoke checks. */
-export const launchNitro = async (directory: string, environment: NodeJS.ProcessEnv = {}) => {
+/** Launch Nitro for HTTP smoke checks. */
+export const launchNitro = async (directory: string, environment: NodeJS.ProcessEnv = {}, dev = false) => {
   const reservation = createServer()
   reservation.listen(0, '127.0.0.1')
   await once(reservation, 'listening')
@@ -19,7 +19,10 @@ export const launchNitro = async (directory: string, environment: NodeJS.Process
   await new Promise<void>((resolve) => reservation.close(() => resolve()))
   const url = `http://127.0.0.1:${port}`
 
-  const child = spawn(process.execPath, ['.output/server/index.mjs'], {
+  const args = dev
+    ? ['node_modules/nitro/dist/cli/index.mjs', 'dev', '--host', '127.0.0.1', '--port', String(port)]
+    : ['.output/server/index.mjs']
+  const child = spawn(process.execPath, args, {
     cwd: resolve(import.meta.dirname, '..'),
     env: {
       ...process.env,
@@ -42,9 +45,9 @@ export const launchNitro = async (directory: string, environment: NodeJS.Process
   })
   const exited = once(child, 'exit')
   let closing: Promise<void> | undefined
-  const close = () =>
+  const close = (signal: NodeJS.Signals = 'SIGTERM') =>
     (closing ??= (async () => {
-      child.kill('SIGTERM')
+      child.kill(signal)
       const timeout = setTimeout(() => child.kill('SIGKILL'), 10000)
       try {
         const [code] = await exited

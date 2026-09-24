@@ -10,7 +10,7 @@ import { DeepAgentsRuntime } from '@qingshaner/runtime-deepagents'
 import { DshRuntime } from '@qingshaner/runtime-dsh'
 import { Skills } from '@qingshaner/skill'
 
-import { createService } from './index.ts'
+import { createService } from '../service.ts'
 
 const openConfiguredService = async () => {
   const dataDir = resolve(process.env.RUNTIME_DATA_DIR ?? '.agent-runtime')
@@ -73,4 +73,5 @@ const openConfiguredService = async () => {
   return { close, fetch: server.fetch }
 }
 let service: ReturnType<typeof openConfiguredService> | undefined
+/** Share one initialization promise between the Nitro plugin and all requests. */
 export const configuredService = () => (service ??= openConfiguredService())

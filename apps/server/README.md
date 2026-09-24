@@ -1,5 +1,14 @@
 # Local runtime HTTP service (Nitro + oRPC)
 
+`src/index.ts` is the Nitro Fetch entry. `service.ts` owns the injectable service,
+`middlewares/auth.ts` enforces Host/Origin/bearer checks, `router/index.ts` implements
+the contract, and `spec.ts` generates OpenAPI. `infra/service.ts` opens configured
+resources; Nitro discovers `plugins/index.ts` to initialize and close the service.
+The Nitro development parent waits for worker cleanup on Ctrl+C/SIGTERM before exiting,
+so restarting with the same data directory can reacquire its lock. After a forced kill,
+confirm the lock's host and PID are no longer active and back up the data directory before
+manually removing `.manager.lock`; startup never takes over an existing lock automatically.
+
 Run `pnpm --filter @internal/server start` to build and launch the Nitro Node server. `RUNTIME_DATA_DIR` defaults to
 `.agent-runtime`; `PORT` defaults to 4310. The listener binds 127.0.0.1 only.
 Read the generated bearer token from `http-token` in that data directory (mode
@@ -18,9 +27,13 @@ runtime when resumed, and all runtimes use the same project resources and memory
 
 Contracts live in the browser-safe `@qingshaner/runtime-contract` workspace package.
 Nitro 3.0.260903-beta and oRPC 2.0.0-beta.36 are pinned to the reference implementation.
-`GET /spec.json` serves generated OpenAPI JSON behind the same bearer/Host/Origin checks.
+`GET /spec.json` serves generated OpenAPI JSON behind the same bearer/Host/Origin checks in production.
+With `pnpm exec nitro dev` in `apps/server`, open `http://localhost:3000/spec.json` directly:
+the development entry serves the static contract without authentication. Other routes retain their checks.
+Open `http://localhost:3000/openapi.html` for the Scalar API reference in development.
+It loads Scalar from jsDelivr (requires internet access) and reads `/spec.json`; no token is embedded or persisted.
 Use `OpenAPILink(contract, { origin, headers })` and `createORPCClient` for typed REST calls;
-see `examples/tanstack/client.ts`. There is no separate RPC endpoint or docs UI.
+see `examples/tanstack/client.ts`. There is no separate RPC endpoint; the docs UI is development-only.
 
 All request bodies use JSON (maximum 1 MiB). Creation of a session requires explicit `model`,
 `runtime`, `projectId`, and existing `cwd`. Routes delegate to the SDK:

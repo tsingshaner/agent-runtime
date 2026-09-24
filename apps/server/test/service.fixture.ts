@@ -1,4 +1,4 @@
-import { createService, type ServerOptions } from '../src/index'
+import { createService, type ServerOptions } from '../src/service'
 
 /** Exercise the production Fetch boundary without owning an HTTP listener. */
 export const openTestService = async (options: Omit<ServerOptions, 'origin'>) => {

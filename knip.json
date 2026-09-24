@@ -6,7 +6,7 @@
   "tags": ["-lintignore"],
   "workspaces": {
     "apps/server": {
-      "entry": ["src/lifecycle.ts", "src/index.ts", "*-smoke.ts"],
+      "entry": ["src/plugins/index.ts", "src/index.ts", "*-smoke.ts"],
       "project": ["src/**/*.ts", "*.ts"]
     },
     "examples/*": {

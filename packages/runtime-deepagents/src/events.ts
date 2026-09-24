@@ -9,6 +9,7 @@ import type { AdapterNotice } from '@qingshaner/runtime'
 export class Events {
   #current?: string
   readonly #calls = new Set<string>()
+  readonly #results = new Set<string>()
   constructor(
     readonly runId: string,
     readonly emit: (notice: AdapterNotice) => Promise<void>
@@ -69,7 +70,15 @@ export class Events {
         })
         await this.emit({ event: { toolCallId: call.id, type: EventType.TOOL_CALL_END }, kind: 'event' })
       }
-    } else if (ToolMessage.isInstance(message)) {
+    }
+    await this.#result(message)
+  }
+  async #result(message: BaseMessage) {
+    if (ToolMessage.isInstance(message)) {
+      if (this.#results.has(message.tool_call_id)) {
+        return
+      }
+      this.#results.add(message.tool_call_id)
       await this.emit({
         event: {
           content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),

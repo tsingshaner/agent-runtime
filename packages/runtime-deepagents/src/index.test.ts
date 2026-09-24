@@ -2,11 +2,13 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout } from 'node:timers/promises'
 
 import { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { AIMessage, type BaseMessage } from '@langchain/core/messages'
 import { RuntimeManager } from '@qingshaner/runtime'
 import { describe, expect, test } from 'vitest'
+import { z } from 'zod'
 
 import { DeepAgentsRuntime } from './index'
 
@@ -18,7 +20,33 @@ class Model extends BaseChatModel {
     return this
   }
   _generate(messages: BaseMessage[]) {
-    const message = new AIMessage(`Reply ${messages.filter((m) => m.type === 'human').length}`)
+    const last = messages.at(-1)
+    const message =
+      last?.content === 'slow'
+        ? new AIMessage({ content: '', tool_calls: [{ args: {}, id: 'slow', name: 'slow_effect', type: 'tool_call' }] })
+        : last?.content === 'input'
+          ? new AIMessage({
+              content: '',
+              tool_calls: [
+                {
+                  args: { questions: [{ header: 'Name', id: 'name', question: 'Your name?' }] },
+                  id: 'ask',
+                  name: 'ask_user',
+                  type: 'tool_call'
+                }
+              ]
+            })
+          : last?.content === 'batch'
+            ? new AIMessage({
+                content: '',
+                tool_calls: ['approved', 'denied'].map((label) => ({
+                  args: { label },
+                  id: label,
+                  name: 'record_effect',
+                  type: 'tool_call' as const
+                }))
+              })
+            : new AIMessage(`Reply ${messages.filter((m) => m.type === 'human').length}`)
     return Promise.resolve({ generations: [{ message, text: String(message.content) }] })
   }
 }
@@ -78,4 +106,196 @@ describe('Deep Agents through Manager', () => {
       await rm(dir, { force: true, recursive: true })
     }
   })
+  test('collects mixed approval decisions before executing only approved native tools', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deep-approval-'))
+    const effects: string[] = []
+    const record = {
+      description: 'Record effect',
+      execute: ({ label }: Record<string, unknown>) => {
+        effects.push(String(label))
+        return String(label)
+      },
+      name: 'record_effect',
+      schema: z.object({ label: z.string() })
+    }
+    const manager = await RuntimeManager.open({
+      dataDir: join(dir, 'manager'),
+      runtimes: [new DeepAgentsRuntime({ dataDir: join(dir, 'native'), model: () => new Model({}), tools: [record] })]
+    })
+    try {
+      const project = await manager.createProject({ name: 'test' })
+      const session = await manager.createSession({
+        cwd: dir,
+        model: 'fixture',
+        projectId: project.id,
+        runtime: 'deepagents'
+      })
+      const { runId } = await manager.run(session.id, { text: 'batch' })
+      await expect.poll(async () => (await manager.listPendingApprovals(runId)).length).toBe(2)
+      const pending = await manager.listPendingApprovals(runId)
+      await manager.respondApproval(runId, pending.find((item) => item.nativeRequestId === 'approved')?.id, 'approve')
+      expect(effects).toEqual([])
+      await manager.respondApproval(runId, pending.find((item) => item.nativeRequestId === 'denied')?.id, 'deny')
+      const events = await Array.fromAsync(manager.subscribe(runId))
+      expect(effects).toEqual(['approved'])
+      expect((await manager.getRun(runId)).status).toBe('succeeded')
+      expect(events.filter((e) => e.event.type === 'TOOL_CALL_RESULT')).toHaveLength(2)
+      expect(events.filter((e) => e.event.type === 'RUN_FINISHED')).toHaveLength(1)
+      await expect(
+        manager.respondApproval(runId, pending.find((item) => item.nativeRequestId === 'approved')?.id, 'approve')
+      ).rejects.toThrow()
+    } finally {
+      await manager.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  }, 30000)
+
+  test('answers input in the same run and cancels waiting work without replaying it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deep-input-'))
+    const open = () =>
+      RuntimeManager.open({
+        dataDir: join(dir, 'manager'),
+        runtimes: [new DeepAgentsRuntime({ dataDir: join(dir, 'native'), model: () => new Model({}) })]
+      })
+    let manager = await open()
+    try {
+      const project = await manager.createProject({ name: 'test' })
+      const session = await manager.createSession({
+        cwd: dir,
+        model: 'fixture',
+        projectId: project.id,
+        runtime: 'deepagents'
+      })
+      const { runId } = await manager.run(session.id, { text: 'input' })
+      await expect.poll(async () => (await manager.listPendingInputs(runId)).length).toBe(1)
+      expect((await manager.getRun(runId)).status).toBe('waiting_input')
+      await expect(manager.run(session.id, { text: 'concurrent' })).rejects.toMatchObject({ code: 'SESSION_BUSY' })
+      const [input] = await manager.listPendingInputs(runId)
+      await manager.respondInput(runId, input?.id, { name: ['Ada'] })
+      await Array.fromAsync(manager.subscribe(runId))
+      expect((await manager.getRun(runId)).status).toBe('succeeded')
+      const cancelled = await manager.run(session.id, { text: 'input' })
+      await expect.poll(async () => (await manager.listPendingInputs(cancelled.runId)).length).toBe(1)
+      await manager.cancel(cancelled.runId)
+      await Array.fromAsync(manager.subscribe(cancelled.runId))
+      expect((await manager.getRun(cancelled.runId)).status).toBe('cancelled')
+      await manager.dispose()
+      manager = await open()
+      await expect(manager.resumeSession(session.id)).rejects.toMatchObject({ code: 'UNSAFE_RESUME' })
+      expect(await manager.listPendingInputs(cancelled.runId)).toEqual([])
+    } finally {
+      await manager.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  }, 30000)
+  test('waits for cancelled tool cleanup and leaves other sessions usable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deep-cancel-'))
+    const started = Promise.withResolvers<void>()
+    let stopped = false
+    let effect = false
+    const slow = {
+      description: 'Slow operation',
+      execute: async (_: Record<string, unknown>, signal: AbortSignal) => {
+        started.resolve()
+        try {
+          await setTimeout(60000, undefined, { signal })
+          effect = true
+          return 'done'
+        } finally {
+          await setTimeout(20)
+          stopped = true
+        }
+      },
+      name: 'slow_effect',
+      schema: z.object({})
+    }
+    const manager = await RuntimeManager.open({
+      dataDir: join(dir, 'manager'),
+      runtimes: [
+        new DeepAgentsRuntime({
+          approvalTools: [],
+          dataDir: join(dir, 'native'),
+          model: () => new Model({}),
+          tools: [slow]
+        })
+      ]
+    })
+    try {
+      const project = await manager.createProject({ name: 'test' })
+      const session = await manager.createSession({
+        cwd: dir,
+        model: 'fixture',
+        projectId: project.id,
+        runtime: 'deepagents'
+      })
+      const other = await manager.createSession({
+        cwd: dir,
+        model: 'fixture',
+        projectId: project.id,
+        runtime: 'deepagents'
+      })
+      const run = await manager.run(session.id, { text: 'slow' })
+      await started.promise
+      await manager.cancel(run.runId)
+      await Array.fromAsync(manager.subscribe(run.runId))
+      expect(stopped).toBe(true)
+      expect(effect).toBe(false)
+      expect((await manager.getRun(run.runId)).status).toBe('cancelled')
+      const fresh = await manager.run(other.id, { text: 'hello' })
+      await Array.fromAsync(manager.subscribe(fresh.runId))
+      expect((await manager.getRun(fresh.runId)).status).toBe('succeeded')
+      await expect(manager.resumeSession(session.id)).rejects.toMatchObject({ code: 'UNSAFE_RESUME' })
+    } finally {
+      await manager.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  }, 30000)
+  test('does not confirm cancellation when a tool ignores abort', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deep-unsafe-'))
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<string>()
+    const manager = await RuntimeManager.open({
+      dataDir: join(dir, 'manager'),
+      runtimes: [
+        new DeepAgentsRuntime({
+          approvalTools: [],
+          dataDir: join(dir, 'native'),
+          model: () => new Model({}),
+          tools: [
+            {
+              description: 'Uncooperative tool',
+              execute: () => {
+                started.resolve()
+                return release.promise
+              },
+              name: 'slow_effect',
+              schema: z.object({})
+            }
+          ]
+        })
+      ]
+    })
+    try {
+      const project = await manager.createProject({ name: 'test' })
+      const session = await manager.createSession({
+        cwd: dir,
+        model: 'fixture',
+        projectId: project.id,
+        runtime: 'deepagents'
+      })
+      const run = await manager.run(session.id, { text: 'slow' })
+      await started.promise
+      await manager.cancel(run.runId)
+      await Array.fromAsync(manager.subscribe(run.runId))
+      expect(await manager.getRun(run.runId)).toMatchObject({
+        error: { code: 'CANCELLATION_UNCONFIRMED' },
+        status: 'failed'
+      })
+      await expect(manager.resumeSession(session.id)).rejects.toMatchObject({ code: 'UNSAFE_RESUME' })
+    } finally {
+      release.resolve('done')
+      await manager.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  }, 30000)
 })

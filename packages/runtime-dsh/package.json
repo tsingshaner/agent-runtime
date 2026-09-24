@@ -1,0 +1,49 @@
+{
+  "author": {
+    "name": "qingshaner",
+    "url": "https://github.com/Jon-a-than"
+  },
+  "bugs": {
+    "url": "https://github.com/tsingshaner/agent-runtime/issues"
+  },
+  "dependencies": {
+    "@qingshaner/runtime": "workspace:*",
+    "@deepseek-ai/dsh": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-sdk-client": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
+    "@deepseek-ai/cordis": "4.0.2",
+    "@ag-ui/core": "catalog:"
+  },
+  "description": "DeepSeek Harness runtime adapter",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=12.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "homepage": "https://github.com/tsingshaner/agent-runtime#readme",
+  "license": "ISC",
+  "main": "dist/index.mjs",
+  "name": "@qingshaner/runtime-dsh",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tsingshaner/agent-runtime.git"
+  },
+  "type": "module",
+  "types": "dist/index.d.mts",
+  "version": "0.0.0"
+}

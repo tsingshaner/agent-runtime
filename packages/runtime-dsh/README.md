@@ -1,3 +1,4 @@
+<!-- cspell:ignore SIGSTOP -->
 # DSH runtime
 
 `DshRuntime({ dataDir, apiKeyEnv?: 'DEEPSEEK_API_KEY', baseURL? })` implements
@@ -40,3 +41,28 @@ timeout closes only the target session process and records `interrupted`.
 isolation, SIGKILL interruption, and SIGSTOP cancellation fallback using real
 owned Harness processes. `native-control.test.ts` verifies bearer rejection,
 channel disconnect and process release. All use a local model fixture.
+
+Project resources reuse `ProjectResources`; the official DSH MCP client talks
+to its authenticated bridge, so Knowledge and both upstream MCP transports use
+the existing resource managers. The official filesystem Skill provider receives
+only links to enabled managed directories, with default roots and watching off.
+Missing/ambiguous native skill catalogs fail before model execution. Changes
+close idle session processes and explicitly resume their original histories.
+The Manager drains active runs and keeps approval/input/cancel available first.
+
+`resources.test.ts` verifies actual Knowledge/Skill reads, stdio and HTTP MCP
+calls, ordinary tool errors, project/global isolation, drain/rebuild, disabled
+skill rejection and release of the old MCP child.
+
+Hosted acceptance on 2026-09-24: PASS with `deepseek-v4-flash`, official Harness
+and SDK `0.1.5-rc.2`. The formal adapter executed Skill, Knowledge, real stdio/HTTP
+MCP and native user input; a new process resumed the same session and recalled
+the two resource secrets and chosen answer. Run explicitly (never in CI):
+
+```sh
+DSH_LIVE=1 DSH_MODEL=deepseek-v4-flash node --env-file=.env.local \
+  node_modules/vitest/vitest.mjs run packages/runtime-dsh/src/live.test.ts
+```
+
+Hosted refusal/cancellation timing is not claimed: those failure paths are
+verified using the real Harness with controlled model replies and process faults.

@@ -4,12 +4,15 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { RuntimeManager } from '@qingshaner/runtime'
+import { type ProjectResources, RuntimeManager } from '@qingshaner/runtime'
 
 import { DshRuntime } from '../src/index'
 
 export type Reply = string | { name: string; arguments: Record<string, unknown> } | null
-export const fixture = async (reply: (body: unknown, index: number) => Reply) => {
+export const fixture = async (
+  reply: (body: unknown, index: number) => Reply,
+  resources?: (root: string) => Promise<ProjectResources>
+) => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-controls-'))
   let requests = 0
   const server = createServer(async (request, response) => {
@@ -51,7 +54,11 @@ export const fixture = async (reply: (body: unknown, index: number) => Reply) =>
     controlTimeoutMs: 1500,
     dataDir: join(root, 'native')
   })
-  const manager = await RuntimeManager.open({ dataDir: join(root, 'manager'), runtimes: [runtime] })
+  const manager = await RuntimeManager.open({
+    dataDir: join(root, 'manager'),
+    resources: await resources?.(root),
+    runtimes: [runtime]
+  })
   await manager.createProject({ id: 'project', name: 'Project' })
   const create = () =>
     manager.createSession({ cwd: root, model: 'deepseek-v4-flash', projectId: 'project', runtime: 'dsh' })
@@ -67,4 +74,33 @@ export const fixture = async (reply: (body: unknown, index: number) => Reply) =>
     root,
     runtime
   }
+}
+
+export const drive = async (
+  manager: RuntimeManager,
+  runId: string,
+  onApproval?: (
+    approval: import('@qingshaner/runtime').Approval
+  ) => Promise<import('@qingshaner/runtime').ApprovalDecision>,
+  answer?: (input: import('@qingshaner/runtime').InputRequest) => import('@qingshaner/runtime').InputAnswers
+) => {
+  const events: import('@qingshaner/runtime').EventEnvelope[] = []
+  for await (const envelope of manager.subscribe(runId)) {
+    events.push(envelope)
+    const event = envelope.event
+    if (event.type !== 'CUSTOM') {
+      continue
+    }
+    if (event.name === 'runtime.approval.requested') {
+      for (const approval of await manager.listPendingApprovals(runId)) {
+        await manager.respondApproval(runId, approval.id, (await onApproval?.(approval)) ?? 'approve')
+      }
+    }
+    if (event.name === 'runtime.input.requested' && answer) {
+      for (const input of await manager.listPendingInputs(runId)) {
+        await manager.respondInput(runId, input.id, answer(input))
+      }
+    }
+  }
+  return events
 }

@@ -8,6 +8,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-skill'
 
 const readBody = async (request: IncomingMessage) => {
   let size = 0
@@ -83,6 +84,17 @@ export const apply = async (ctx: Context) => {
     response.end()
     return
   }
+  const checkSkills = async () => {
+    if (process.env.RUNTIME_DSH_SKILL_COUNT !== undefined) {
+      const skills = ctx.get('skills')
+      if (
+        !skills ||
+        (await skills.list({ cwd: process.cwd() })).length !== Number(process.env.RUNTIME_DSH_SKILL_COUNT)
+      ) {
+        throw new Error('Enabled skill unavailable')
+      }
+    }
+  }
   const operate = async (
     path: string | undefined,
     body: { text?: unknown; id?: unknown; decision?: unknown; answers?: unknown },
@@ -91,6 +103,7 @@ export const apply = async (ctx: Context) => {
     switch (path) {
       case '/create':
       case '/resume': {
+        await checkSkills()
         if (owned) {
           throw new Error('Already loaded')
         }

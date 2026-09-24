@@ -17,7 +17,11 @@
     "@ag-ui/core": "catalog:",
     "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
     "@deepseek-ai/dsh-user-questions": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-tool-ask-user": "0.1.5-rc.2"
+    "@deepseek-ai/dsh-tool-ask-user": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-mcp-client": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-skill": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-skill": "0.1.5-rc.2"
   },
   "description": "DeepSeek Harness runtime adapter",
   "engines": {
@@ -48,5 +52,11 @@
   },
   "type": "module",
   "types": "dist/index.d.mts",
-  "version": "0.0.0"
+  "version": "0.0.0",
+  "devDependencies": {
+    "@qingshaner/knowledge": "workspace:*",
+    "@qingshaner/skill": "workspace:*",
+    "@qingshaner/mcp": "workspace:*",
+    "@modelcontextprotocol/sdk": "catalog:"
+  }
 }

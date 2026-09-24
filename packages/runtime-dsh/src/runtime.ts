@@ -13,10 +13,12 @@ import type {
   ApprovalDecision,
   InputAnswers,
   NativeSession,
+  ResourceSnapshot,
   RuntimeAdapter
 } from '@qingshaner/runtime'
 
 import { Projection, readFrames } from './events'
+import { resourcePlugins } from './resources'
 
 export interface DshRuntimeOptions {
   dataDir: string
@@ -37,8 +39,11 @@ type Child = {
 
 export class DshRuntime implements RuntimeAdapter {
   readonly kind = 'dsh'
+  readonly #owned = new Set<DeepSeekHarness>()
   readonly #children = new Map<string, Promise<Child>>()
   readonly #active = new Map<string, Child>()
+  readonly #resources = new Map<string, ResourceSnapshot>()
+  #unsafeClose = false
   #disposed = false
   #closing?: Promise<void>
   constructor(readonly options: DshRuntimeOptions) {
@@ -49,6 +54,28 @@ export class DshRuntime implements RuntimeAdapter {
     ) {
       throw new RuntimeError('INVALID_INPUT', 'Invalid DSH options')
     }
+  }
+  configureProject = async (projectId: string, snapshot: ResourceSnapshot): Promise<void> => {
+    if (this.#disposed) {
+      throw new RuntimeError('DISPOSED', 'DSH runtime disposed')
+    }
+    if (this.#unsafeClose) {
+      throw new RuntimeError('DSH_CLOSE_FAILED', 'DSH process ownership is unresolved')
+    }
+    if (JSON.stringify(this.#resources.get(projectId)) === JSON.stringify(snapshot)) {
+      return
+    }
+    if ([...this.#active.values()].some((child) => child.session.projectId === projectId)) {
+      throw new RuntimeError('RESOURCES_UPDATING', 'Project has active runs')
+    }
+    for (const [id, pending] of this.#children) {
+      const child = await pending
+      if (child.session.projectId === projectId) {
+        await this.#close(child.harness)
+        this.#children.delete(id)
+      }
+    }
+    this.#resources.set(projectId, snapshot)
   }
   createSession = async (input: {
     cwd: string
@@ -75,6 +102,9 @@ export class DshRuntime implements RuntimeAdapter {
   #load = (session: NativeSession, create: boolean): Promise<Child> => {
     if (this.#disposed) {
       throw new RuntimeError('DISPOSED', 'DSH runtime disposed')
+    }
+    if (this.#unsafeClose) {
+      throw new RuntimeError('DSH_CLOSE_FAILED', 'DSH process ownership is unresolved')
     }
     if (!(/^[a-zA-Z0-9-]{1,128}$/.test(session.nativeSessionId) && session.model)) {
       throw new RuntimeError('INVALID_INPUT', 'Invalid DSH session')
@@ -115,6 +145,7 @@ export class DshRuntime implements RuntimeAdapter {
     const addressFile = join(directory, `control-${randomUUID()}.json`)
     const patch = join(directory, 'runtime.patch.json')
     const source = import.meta.url.endsWith('.ts') ? './control.ts' : './control.mjs'
+    const plugins = await resourcePlugins(directory, this.#resources.get(session.projectId ?? ''))
     await writeFile(
       patch,
       JSON.stringify([
@@ -128,6 +159,7 @@ export class DshRuntime implements RuntimeAdapter {
         },
         {
           insert: [
+            ...plugins,
             { id: 'user-questions', name: '@deepseek-ai/dsh-user-questions' },
             { id: 'ask-user', name: '@deepseek-ai/dsh-tool-ask-user' },
             { id: 'runtime-control', name: fileURLToPath(new URL(source, import.meta.url)) }
@@ -136,8 +168,13 @@ export class DshRuntime implements RuntimeAdapter {
       ]),
       { mode: 0o600 }
     )
+    if (this.#disposed) {
+      throw new RuntimeError('DISPOSED', 'DSH runtime disposed')
+    }
     const harness = new DeepSeekHarness({
       cwd: session.cwd,
+      disposeEofGraceMs: 500,
+      disposeGraceMs: 750,
       dshHome: join(directory, 'home'),
       env: {
         DEEPSEEK_API_KEY: process.env[this.options.apiKeyEnv ?? 'DEEPSEEK_API_KEY'],
@@ -146,28 +183,22 @@ export class DshRuntime implements RuntimeAdapter {
         RUNTIME_DSH_ADDRESS: addressFile,
         RUNTIME_DSH_MODEL: session.model,
         RUNTIME_DSH_SESSION: session.nativeSessionId,
+        RUNTIME_DSH_SKILL_COUNT: this.#resources.has(session.projectId ?? '')
+          ? String(this.#resources.get(session.projectId ?? '')?.skillDirectories.length)
+          : undefined,
         RUNTIME_DSH_TOKEN: token
       },
       initializeTimeoutMs: 30000,
       model: session.model,
       patches: [patch],
       processCwd: session.cwd,
-      profile: 'sdk-minimal'
+      profile: 'sdk-minimal',
+      shutdownTimeoutMs: 250
     })
+    this.#owned.add(harness)
     try {
       await harness.start()
-      let port: number | undefined
-      for (let i = 0; i < 100; i++) {
-        try {
-          port = JSON.parse(await readFile(addressFile, 'utf8')).port
-          break
-        } catch {
-          await delay(20)
-        }
-      }
-      if (!Number.isInteger(port)) {
-        throw new RuntimeError('CONTROL_UNAVAILABLE', 'DSH control did not start')
-      }
+      const port = await this.#controlPort(addressFile)
       const child = { directory, harness, session, token, url: `http://127.0.0.1:${port}` }
       await this.#call(child, create ? '/create' : '/resume', {})
       if (create) {
@@ -175,13 +206,37 @@ export class DshRuntime implements RuntimeAdapter {
       }
       return child
     } catch (error) {
-      await harness.close()
+      await this.#close(harness)
       if (error instanceof RuntimeError) {
         throw error
       }
       throw new RuntimeError('DSH_START_FAILED', 'DSH startup or native session load failed')
     } finally {
       await rm(addressFile, { force: true })
+    }
+  }
+  #controlPort = async (addressFile: string) => {
+    let port: number | undefined
+    for (let i = 0; i < 100; i++) {
+      try {
+        port = JSON.parse(await readFile(addressFile, 'utf8')).port
+        break
+      } catch {
+        await delay(20)
+      }
+    }
+    if (!Number.isInteger(port)) {
+      throw new RuntimeError('CONTROL_UNAVAILABLE', 'DSH control did not start')
+    }
+    return port
+  }
+  #close = async (harness: DeepSeekHarness): Promise<void> => {
+    try {
+      await harness.close()
+      this.#owned.delete(harness)
+    } catch {
+      this.#unsafeClose = true
+      throw new RuntimeError('DSH_CLOSE_FAILED', 'DSH process exit could not be confirmed')
     }
   }
   #call = async (child: Child, path: string, body: unknown) => {
@@ -231,7 +286,7 @@ export class DshRuntime implements RuntimeAdapter {
       await rm(join(child.directory, 'active'))
       return { ...projection.outcome, finalReply: projection.finalReply }
     } catch {
-      await child.harness.close()
+      await this.#close(child.harness)
       this.#children.delete(session.nativeSessionId)
       return {
         error: {
@@ -261,7 +316,7 @@ export class DshRuntime implements RuntimeAdapter {
       ])
     } catch {
       child.abort?.abort()
-      await child.harness.close()
+      await this.#close(child.harness)
     } finally {
       clearTimeout(timeout)
     }
@@ -287,10 +342,11 @@ export class DshRuntime implements RuntimeAdapter {
   dispose = (): Promise<void> => {
     this.#disposed = true
     this.#closing ??= (async () => {
-      const children = await Promise.allSettled(this.#children.values())
-      await Promise.all(
-        children.filter((child) => child.status === 'fulfilled').map((child) => child.value.harness.close())
-      )
+      const results = await Promise.allSettled([...this.#owned].map(this.#close))
+      await Promise.allSettled(this.#children.values())
+      if (results.some((result) => result.status === 'rejected')) {
+        throw new RuntimeError('DSH_CLOSE_FAILED', 'DSH process exit could not be confirmed')
+      }
     })()
     return this.#closing
   }

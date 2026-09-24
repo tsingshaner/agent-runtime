@@ -4,7 +4,7 @@ import { EventType } from '@ag-ui/core'
 import { RuntimeError } from '@qingshaner/runtime'
 
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, TurnEndReason } from '@deepseek-ai/dsh-session'
 import type { AdapterNotice, AdapterOutcome } from '@qingshaner/runtime'
 
 export type Frame =
@@ -38,6 +38,17 @@ export async function* readFrames(body: ReadableStream<Uint8Array>): AsyncGenera
   } finally {
     await reader.cancel()
   }
+}
+const outcome = (reason: TurnEndReason): AdapterOutcome => {
+  if (reason.kind === 'completed') {
+    return { status: 'succeeded' }
+  }
+  if (reason.kind === 'aborted') {
+    return { status: reason.reason.kind === 'user' ? 'cancelled' : 'interrupted' }
+  }
+  const status =
+    reason.kind === 'error' && Number.isInteger(reason.error.status) ? ` (HTTP ${reason.error.status})` : ''
+  return { error: { code: 'DSH_TURN_FAILED', message: `DSH turn ended: ${reason.kind}${status}` }, status: 'failed' }
 }
 export class Projection {
   outcome?: AdapterOutcome
@@ -132,15 +143,7 @@ export class Projection {
         }
         return
       case 'turn/end':
-        this.outcome =
-          event.data.reason.kind === 'completed'
-            ? { status: 'succeeded' }
-            : event.data.reason.kind === 'aborted'
-              ? { status: event.data.reason.reason.kind === 'user' ? 'cancelled' : 'interrupted' }
-              : {
-                  error: { code: 'DSH_TURN_FAILED', message: `DSH turn ended: ${event.data.reason.kind}` },
-                  status: 'failed'
-                }
+        this.outcome = outcome(event.data.reason)
     }
   }
 }

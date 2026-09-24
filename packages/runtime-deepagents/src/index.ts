@@ -20,11 +20,13 @@ import type {
   ApprovalDecision,
   InputAnswers,
   NativeSession,
+  ResourceSnapshot,
   RuntimeAdapter
 } from '@qingshaner/runtime'
 
 import { Events } from './events'
 import { approvalMiddleware, executionMiddleware, inputTool, nativeInteraction, trackedTool } from './interactions'
+import { filesystem, openResources } from './resources'
 
 export interface DeepAgentsTool {
   name: string
@@ -47,6 +49,7 @@ export interface DeepAgentsOptions {
 export class DeepAgentsRuntime implements RuntimeAdapter {
   readonly kind = 'deepagents' as const
   #saver?: SqliteSaver
+  readonly #projects = new Map<string, ResourceSnapshot>()
   #disposed = false
   #opening?: Promise<SqliteSaver>
   #disposing?: Promise<void>
@@ -65,7 +68,14 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
     }
   }
 
-  async #graph(session: NativeSession, pending = new Set<Promise<unknown>>()) {
+  configureProject(projectId: string, snapshot: ResourceSnapshot): Promise<void> {
+    if (this.#disposed) {
+      return Promise.reject(new RuntimeError('DISPOSED', 'Deep Agents disposed'))
+    }
+    this.#projects.set(projectId, { ...snapshot, skillDirectories: [...snapshot.skillDirectories] })
+    return Promise.resolve()
+  }
+  async #graph(session: NativeSession, pending = new Set<Promise<unknown>>(), resources: DeepAgentsTool[] = []) {
     if (this.#disposed) {
       throw new RuntimeError('DISPOSED', 'Deep Agents disposed')
     }
@@ -81,14 +91,36 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
       })
       this.#saver = await this.#opening
     }
+    const tools = [...(this.options.tools ?? []), ...resources]
+    const reserved = new Set([
+      'ask_user',
+      'ls',
+      'read_file',
+      'write_file',
+      'edit_file',
+      'glob',
+      'grep',
+      'execute',
+      'task',
+      'write_todos'
+    ])
+    for (const tool of tools) {
+      if (reserved.has(tool.name)) {
+        throw new RuntimeError('TOOL_CONFLICT', 'Project tool name conflicts with native tools')
+      }
+      reserved.add(tool.name)
+    }
     return createDeepAgent({
+      backend: filesystem(session.cwd, pending),
       checkpointer: this.#saver,
       middleware: [
         executionMiddleware(pending),
         approvalMiddleware(
           new Set(
             this.options.approvalTools ?? [
-              ...(this.options.tools ?? []).map((tool) => tool.name),
+              ...tools
+                .filter((tool) => !['knowledge_read', 'knowledge_search'].includes(tool.name))
+                .map((tool) => tool.name),
               'write_file',
               'edit_file',
               'execute',
@@ -104,8 +136,9 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
           configuration: { baseURL: this.options.baseUrl },
           model: session.model.replace(/^openai:/, '')
         }),
+      skills: this.#projects.get(session.projectId ?? '')?.skillDirectories ?? [],
       subagents: [],
-      tools: [...(this.options.tools ?? []).map((spec) => trackedTool(spec, pending)), inputTool]
+      tools: [...tools.map((spec) => trackedTool(spec, pending)), inputTool]
     })
   }
   #config(session: NativeSession) {
@@ -161,9 +194,14 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
     const done = Promise.withResolvers<void>()
     this.#runs.set(input.runId, { controller, done: done.promise })
     const pending = new Set<Promise<unknown>>()
+    let resourceCancellationUnconfirmed = false
+    let resources: Awaited<ReturnType<typeof openResources>> | undefined
     const marker = join(this.options.dataDir, `${session.nativeSessionId}.active`)
     try {
-      const agent = await this.#graph(session, pending)
+      resources = await openResources(this.#projects.get(session.projectId ?? ''), controller.signal, () => {
+        resourceCancellationUnconfirmed = true
+      })
+      const agent = await this.#graph(session, pending, resources.tools)
       await writeFile(marker, input.runId, { flag: 'wx' })
       const config = {
         ...this.#config(session),
@@ -174,7 +212,12 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
       let next: Parameters<typeof agent.graph.stream>[0] = {
         messages: [{ content: [input.context, input.text].filter(Boolean).join('\n\n'), role: 'user' }]
       }
-      const events = new Events(input.runId, emit)
+      const previous = await agent.graph.getState(config)
+      const events = new Events(
+        input.runId,
+        emit,
+        new Set((previous.values.messages ?? []).flatMap((message: BaseMessage) => (message.id ? [message.id] : [])))
+      )
       let resolved: { id: string; kind: 'approval' | 'input' } | undefined
       const streamRound = async (value: Parameters<typeof agent.graph.stream>[0]) => {
         const stream = await agent.graph.stream(value, config)
@@ -214,23 +257,45 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
       const last = state.values.messages?.at(-1)
       return this.#success(last)
     } catch (error) {
-      if (controller.signal.aborted) {
-        await this.#settleTools(pending)
-        return { status: 'cancelled' }
-      }
-      if (error instanceof RuntimeError) {
-        throw error
-      }
-      throw new RuntimeError('DEEPAGENTS_ERROR', 'Native Deep Agents execution failed')
+      return await this.#failure(error, controller.signal, pending, resourceCancellationUnconfirmed)
     } finally {
+      await this.#finish(resources, pending, input.runId, done.resolve)
+    }
+  }
+  async #failure(
+    error: unknown,
+    signal: AbortSignal,
+    pending: Set<Promise<unknown>>,
+    resourceCancellationUnconfirmed: boolean
+  ): Promise<AdapterOutcome> {
+    if (signal.aborted) {
+      await this.#settleTools(pending)
+      if (resourceCancellationUnconfirmed) {
+        throw new RuntimeError('CANCELLATION_UNCONFIRMED', 'Remote tool cancellation was not confirmed')
+      }
+      return { status: 'cancelled' }
+    }
+    if (error instanceof RuntimeError) {
+      throw error
+    }
+    throw new RuntimeError('DEEPAGENTS_ERROR', 'Native Deep Agents execution failed')
+  }
+  async #finish(
+    resources: Awaited<ReturnType<typeof openResources>> | undefined,
+    pending: Set<Promise<unknown>>,
+    runId: string,
+    resolve: () => void
+  ) {
+    await (resources?.close() ?? Promise.resolve()).finally(() => {
       for (const tool of pending) {
         this.#tools.add(tool)
         void tool.finally(() => this.#tools.delete(tool)).catch(() => {})
       }
-      this.#runs.delete(input.runId)
-      done.resolve()
-    }
+      this.#runs.delete(runId)
+      resolve()
+    })
   }
+
   #success(last: unknown): AdapterOutcome {
     return {
       finalReply: AIMessage.isInstance(last) && typeof last.content === 'string' ? last.content : '',
@@ -249,6 +314,7 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
     const native = interrupts[0]
     const request = nativeInteraction.parse(native.value)
     const response = Promise.withResolvers<unknown>()
+    void response.promise.catch(() => {})
     const id = z.string().parse(native.id)
     this.#pending.set(runId, {
       id,

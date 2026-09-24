@@ -5,10 +5,13 @@ import { join } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 
 import { BaseChatModel } from '@langchain/core/language_models/chat_models'
-import { AIMessage, type BaseMessage } from '@langchain/core/messages'
+import { AIMessage, AIMessageChunk, type BaseMessage } from '@langchain/core/messages'
+import { ChatGenerationChunk } from '@langchain/core/outputs'
 import { RuntimeManager } from '@qingshaner/runtime'
 import { describe, expect, test } from 'vitest'
 import { z } from 'zod'
+
+import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager'
 
 import { DeepAgentsRuntime } from './index'
 
@@ -51,13 +54,23 @@ class Model extends BaseChatModel {
   }
 }
 
+class StreamingModel extends Model {
+  async *_streamResponseChunks(messages: BaseMessage[], _options: unknown, runManager?: CallbackManagerForLLMRun) {
+    for (const text of ['Reply ', String(messages.filter((message) => message.type === 'human').length)]) {
+      const chunk = new ChatGenerationChunk({ message: new AIMessageChunk({ content: text }), text })
+      await runManager?.handleLLMNewToken(text, undefined, undefined, undefined, undefined, { chunk })
+      yield chunk
+    }
+  }
+}
+
 describe('Deep Agents through Manager', () => {
   test('streams once and resumes persisted native history in a new host', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'deep-runtime-'))
     const open = () =>
       RuntimeManager.open({
         dataDir: join(dir, 'manager'),
-        runtimes: [new DeepAgentsRuntime({ dataDir: join(dir, 'native'), model: () => new Model({}) })]
+        runtimes: [new DeepAgentsRuntime({ dataDir: join(dir, 'native'), model: () => new StreamingModel({}) })]
       })
     let manager = await open()
     try {
@@ -77,6 +90,7 @@ describe('Deep Agents through Manager', () => {
           .join('')
       ).toBe('Reply 1')
       expect(events.filter((e) => e.event.type === 'RUN_FINISHED')).toHaveLength(1)
+      expect(events.filter((e) => e.event.type === 'TEXT_MESSAGE_CONTENT')).toHaveLength(2)
       await manager.dispose()
       manager = await open()
       await manager.resumeSession(session.id)
@@ -133,16 +147,28 @@ describe('Deep Agents through Manager', () => {
       const { runId } = await manager.run(session.id, { text: 'batch' })
       await expect.poll(async () => (await manager.listPendingApprovals(runId)).length).toBe(2)
       const pending = await manager.listPendingApprovals(runId)
-      await manager.respondApproval(runId, pending.find((item) => item.nativeRequestId === 'approved')?.id, 'approve')
+      await manager.respondApproval(
+        runId,
+        z.string().parse(pending.find((item) => item.nativeRequestId === 'approved')?.id),
+        'approve'
+      )
       expect(effects).toEqual([])
-      await manager.respondApproval(runId, pending.find((item) => item.nativeRequestId === 'denied')?.id, 'deny')
+      await manager.respondApproval(
+        runId,
+        z.string().parse(pending.find((item) => item.nativeRequestId === 'denied')?.id),
+        'deny'
+      )
       const events = await Array.fromAsync(manager.subscribe(runId))
       expect(effects).toEqual(['approved'])
       expect((await manager.getRun(runId)).status).toBe('succeeded')
       expect(events.filter((e) => e.event.type === 'TOOL_CALL_RESULT')).toHaveLength(2)
       expect(events.filter((e) => e.event.type === 'RUN_FINISHED')).toHaveLength(1)
       await expect(
-        manager.respondApproval(runId, pending.find((item) => item.nativeRequestId === 'approved')?.id, 'approve')
+        manager.respondApproval(
+          runId,
+          z.string().parse(pending.find((item) => item.nativeRequestId === 'approved')?.id),
+          'approve'
+        )
       ).rejects.toThrow()
     } finally {
       await manager.dispose()

@@ -12,7 +12,8 @@ export class Events {
   readonly #results = new Set<string>()
   constructor(
     readonly runId: string,
-    readonly emit: (notice: AdapterNotice) => Promise<void>
+    readonly emit: (notice: AdapterNotice) => Promise<void>,
+    readonly past = new Set<string>()
   ) {}
   async end() {
     if (this.#current) {
@@ -45,6 +46,9 @@ export class Events {
   async update(updates: Record<string, { messages?: BaseMessage[] }>) {
     for (const update of Object.values(updates)) {
       for (const message of update?.messages ?? []) {
+        if (message.id && this.past.has(message.id)) {
+          continue
+        }
         await this.#tool(message)
       }
     }

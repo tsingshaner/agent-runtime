@@ -1,6 +1,6 @@
 // cspell:ignore langgraph HITL
 import { AIMessage, ToolMessage } from '@langchain/core/messages'
-import { interrupt } from '@langchain/langgraph'
+import { interrupt, isGraphInterrupt } from '@langchain/langgraph'
 import { createMiddleware, tool } from 'langchain'
 import { z } from 'zod'
 
@@ -81,7 +81,18 @@ export const executionMiddleware = (pending: Set<Promise<unknown>>) =>
       const result = Promise.resolve().then(() => handler(request))
       pending.add(result)
       void result.finally(() => pending.delete(result)).catch(() => {})
-      return result
+      return result.catch((error) => {
+        if (isGraphInterrupt(error) || request.runtime.signal?.aborted) {
+          throw error
+        }
+        return new ToolMessage({
+          content: 'Tool failed',
+          name: request.toolCall.name,
+          status: 'error',
+          // biome-ignore lint/style/useNamingConvention: Native LangChain field.
+          tool_call_id: z.string().parse(request.toolCall.id)
+        })
+      })
     }
   })
 

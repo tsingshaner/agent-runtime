@@ -251,9 +251,16 @@ export class ProjectResources {
     host = `127.0.0.1:${address.port}`
     return {
       close: async () => {
-        await Promise.all([...servers].map((server) => server.close()))
-        http.closeAllConnections()
-        await new Promise<void>((resolve) => http.close(() => resolve()))
+        try {
+          const closed = await Promise.allSettled([...servers].map((server) => server.close()))
+          const failure = closed.find((result) => result.status === 'rejected')
+          if (failure?.status === 'rejected') {
+            throw failure.reason
+          }
+        } finally {
+          http.closeAllConnections()
+          await new Promise<void>((resolve) => http.close(() => resolve()))
+        }
       },
       token,
       url: `http://${host}/mcp`

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { Knowledge } from '@qingshaner/knowledge'
 import { Mcp } from '@qingshaner/mcp'
 import { Skills } from '@qingshaner/skill'
@@ -200,6 +201,51 @@ test('shared mutation gates project creation and binding before enumeration and 
     expect((await manager.createProject({ id: 'late', name: 'late' })).id).toBe('late')
   } finally {
     await manager.dispose()
+    await rm(dir, { force: true, recursive: true })
+  }
+})
+
+test('closes the project HTTP listener even when an active MCP transport fails to close', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'runtime-resource-close-'))
+  const knowledge = await Knowledge.open(join(dir, 'knowledge'))
+  await knowledge.bind('p', dir)
+  const resources = new ProjectResources({ knowledge })
+  const snapshot = await resources.prepare('p')
+  const entered = Promise.withResolvers<void>()
+  const answer = Promise.withResolvers<string>()
+  const reading = vi.spyOn(knowledge, 'read').mockImplementation(() => {
+    entered.resolve()
+    return answer.promise
+  })
+  const client = await Mcp.open(join(dir, 'client'))
+  process.env.RESOURCE_CLOSE_TEST_TOKEN = snapshot.token
+  const config = await client.create({
+    headers: { authorization: 'RESOURCE_CLOSE_TEST_TOKEN' },
+    name: 'bridge',
+    transport: 'http',
+    url: snapshot.url
+  })
+  await client.bind('p', config.id, true)
+  const connection = await client.connect('p')
+  const request = connection.callTool('knowledge_read', { path: 'one.md' }).catch(() => undefined)
+  await entered.promise
+  const close = Server.prototype.close
+  const failure = new Error('Transport close failed')
+  const closing = vi.spyOn(Server.prototype, 'close').mockImplementationOnce(async function (this: Server) {
+    await close.call(this)
+    throw failure
+  })
+  try {
+    await expect(resources.release('p')).rejects.toBe(failure)
+    await expect(fetch(snapshot.url, { signal: AbortSignal.timeout(1000) })).rejects.toThrow()
+  } finally {
+    answer.resolve('done')
+    await client.dispose()
+    await request
+    delete process.env.RESOURCE_CLOSE_TEST_TOKEN
+    closing.mockRestore()
+    reading.mockRestore()
+    await resources.dispose()
     await rm(dir, { force: true, recursive: true })
   }
 })

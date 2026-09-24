@@ -283,7 +283,10 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       const session = await this.#storage(() => this.#store.getSession(sessionId))
       this.#assertRunning()
       this.#assertProjectReady(session.projectId)
-      await this.#getAdapter(session.runtime).resumeSession(this.#nativeSession(session))
+      const adapter = this.#getAdapter(session.runtime)
+      await this.#prepareProjectResources(session.projectId, adapter)
+      this.#assertRunning()
+      await adapter.resumeSession(this.#nativeSession(session))
       return session
     })
   }

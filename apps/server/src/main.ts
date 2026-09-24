@@ -6,6 +6,8 @@ import { Mcp } from '@qingshaner/mcp'
 import { MemoryCoreService, ProjectMemory } from '@qingshaner/memory'
 import { ProjectResources } from '@qingshaner/runtime'
 import { CodexRuntime } from '@qingshaner/runtime-codex'
+import { DeepAgentsRuntime } from '@qingshaner/runtime-deepagents'
+import { DshRuntime } from '@qingshaner/runtime-dsh'
 import { Skills } from '@qingshaner/skill'
 
 import { createService } from './index.ts'
@@ -44,7 +46,15 @@ const openConfiguredService = async () => {
     memoryCore,
     origin: `http://127.0.0.1:${Number(process.env.NITRO_PORT ?? process.env.PORT ?? 4310)}`,
     resources,
-    runtimes: [new CodexRuntime({ dataDir: join(dataDir, 'codex') })]
+    runtimes: [
+      new CodexRuntime({ dataDir: join(dataDir, 'codex') }),
+      new DshRuntime({ baseURL: process.env.DSH_BASE_URL, dataDir: join(dataDir, 'dsh') }),
+      new DeepAgentsRuntime({
+        apiKeyEnv: process.env.DEEPAGENTS_API_KEY_ENV,
+        baseUrl: process.env.DEEPAGENTS_BASE_URL,
+        dataDir: join(dataDir, 'deepagents')
+      })
+    ]
   })
   try {
     const temporary = join(dataDir, `http-token-${process.pid}`)

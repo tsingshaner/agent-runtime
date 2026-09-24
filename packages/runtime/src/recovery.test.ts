@@ -9,9 +9,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { ManualAdapter } from '../test/manual-adapter'
 import { RuntimeManager } from './manager'
+import { ProjectResources, type ResourceSnapshot } from './resources'
 import { SessionStore } from './store'
 
-import type { EventEnvelope } from './types'
+import type { EventEnvelope, NativeSession } from './types'
 
 const gate = () => {
   let resolve!: () => void
@@ -53,6 +54,52 @@ describe('recovery and shutdown', () => {
     })
     return { adapter, manager, session, store }
   }
+
+  test('restores project resources before explicitly resuming after restart', async () => {
+    class ResourceAdapter extends ManualAdapter {
+      snapshot?: ResourceSnapshot
+      configureProject = (_id: string, snapshot: ResourceSnapshot) => {
+        this.snapshot = snapshot
+        return Promise.resolve()
+      }
+      override async resumeSession(session: NativeSession) {
+        if (!this.snapshot) {
+          throw new Error('Project resources missing')
+        }
+        const response = await fetch(this.snapshot.url, {
+          headers: { authorization: this.snapshot.token }
+        })
+        if (response.status !== 405) {
+          throw new Error('Project bridge unavailable')
+        }
+        await super.resumeSession(session)
+      }
+    }
+    manager = await RuntimeManager.open({
+      dataDir: dir,
+      resources: new ProjectResources({}),
+      runtimes: [new ResourceAdapter()]
+    })
+    await manager.createProject({ id: 'project', name: 'project' })
+    const session = await manager.createSession({
+      cwd: dir,
+      model: 'test',
+      projectId: 'project',
+      runtime: 'manual'
+    })
+    await manager.dispose()
+    manager = await RuntimeManager.open({
+      dataDir: dir,
+      resources: new ProjectResources({}),
+      runtimes: [new ResourceAdapter()]
+    })
+    await expect(manager.resumeSession(session.id)).resolves.toMatchObject({
+      activeRunId: null,
+      id: session.id,
+      nativeSessionId: session.nativeSessionId
+    })
+    expect((await manager.listRuns(session.id)).items).toEqual([])
+  })
 
   test('records one interrupted terminal on reopen and expires outstanding approvals', async () => {
     const store = await SessionStore.open(dir)

@@ -4,7 +4,17 @@ Run `pnpm --filter @internal/server start` to build and launch the Nitro Node se
 `.agent-runtime`; `PORT` defaults to 4310. The listener binds 127.0.0.1 only.
 Read the generated bearer token from `http-token` in that data directory (mode
 0600); send it as `Authorization: Bearer <token>`, never in a URL. Nitro is the only HTTP listener;
-there is no programmatic `startServer` entry point. SIGINT/SIGTERM close the owned Manager.
+there is no programmatic `startServer` entry point. SIGINT/SIGTERM close all owned adapters,
+project resource bridges, subscriptions, storage and the owned MemoryCore process.
+
+Sessions select `codex`, `dsh`, or `deepagents`. All three adapters are registered lazily;
+service startup does not start a model or native runtime process. Each has a persistent
+subdirectory beneath `RUNTIME_DATA_DIR`. Codex uses the configured local identity;
+DSH reads `DEEPSEEK_API_KEY` and optional `DSH_BASE_URL`; Deep Agents reads
+`OPENAI_API_KEY` (override the environment variable name with `DEEPAGENTS_API_KEY_ENV`)
+and optional `DEEPAGENTS_BASE_URL`. Credentials stay in environment variables, not session options.
+Every session requires an explicit provider-compatible model. Sessions keep their original
+runtime when resumed, and all runtimes use the same project resources and memory provider.
 
 Contracts live in the browser-safe `@qingshaner/runtime-contract` workspace package.
 Nitro 3.0.260903-beta and oRPC 2.0.0-beta.36 are pinned to the reference implementation.
@@ -38,7 +48,11 @@ validate every route. SSE is encoded by oRPC: `message` carries AG-UI data,
 `error` carries an oRPC error, and `close` ends the transport. Consumers should use
 OpenAPILink to distinguish errors from AG-UI events; no second AG-UI route is maintained.
 
-Normal tests exercise the production Fetch handler and real PGlite with a controlled adapter, without opening a listener or calling a model.
+Normal tests exercise the production Fetch handler and real PGlite with controlled adapters,
+without opening the main HTTP listener or calling a model. Cross-runtime tests verify
+isolated cancellation/process failure, unconfirmed memory writes that do not delay success,
+shutdown, persisted queries after restart and expired input rejection. Native engine behavior
+is verified separately by each adapter's tests and explicit smoke commands.
 All HTTP smoke scripts launch the built Nitro server.
 Explicit real smoke: `RUN_CODEX_SMOKE=1 CODEX_MODEL=<model> pnpm --filter @internal/server smoke`.
 Before the oRPC migration, on 2026-09-17, Codex 0.153.4 / gpt-6-astra passed real submission, text SSE,

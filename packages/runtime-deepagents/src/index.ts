@@ -24,7 +24,7 @@ import type {
   RuntimeAdapter
 } from '@qingshaner/runtime'
 
-import { Events } from './events'
+import { Events, messageText, StreamBudget } from './events'
 import { approvalMiddleware, executionMiddleware, inputTool, nativeInteraction, trackedTool } from './interactions'
 import { filesystem, openResources } from './resources'
 
@@ -203,8 +203,10 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
       })
       const agent = await this.#graph(session, pending, resources.tools)
       await writeFile(marker, input.runId, { flag: 'wx' })
+      const budget = new StreamBudget(controller)
       const config = {
         ...this.#config(session),
+        callbacks: [budget.callback],
         signal: controller.signal,
         streamMode: ['messages', 'updates'] as ['messages', 'updates']
       }
@@ -223,7 +225,11 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
         const stream = await agent.graph.stream(value, config)
         for await (const [mode, value] of stream) {
           if (mode === 'messages') {
-            await events.message((value as [BaseMessage, unknown])[0])
+            const message = (value as [BaseMessage, unknown])[0]
+            await events.message(message)
+            if (AIMessage.isInstance(message)) {
+              budget.consumed()
+            }
           } else {
             await events.update(value as Record<string, { messages?: BaseMessage[] }>)
           }
@@ -257,7 +263,7 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
       const last = state.values.messages?.at(-1)
       return this.#success(last)
     } catch (error) {
-      return await this.#failure(error, controller.signal, pending, resourceCancellationUnconfirmed)
+      return await this.#failure(error, controller.signal, pending, () => resourceCancellationUnconfirmed)
     } finally {
       await this.#finish(resources, pending, input.runId, done.resolve)
     }
@@ -266,11 +272,14 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
     error: unknown,
     signal: AbortSignal,
     pending: Set<Promise<unknown>>,
-    resourceCancellationUnconfirmed: boolean
+    resourceCancellationUnconfirmed: () => boolean
   ): Promise<AdapterOutcome> {
     if (signal.aborted) {
       await this.#settleTools(pending)
-      if (resourceCancellationUnconfirmed) {
+      if (signal.reason instanceof RuntimeError) {
+        throw signal.reason
+      }
+      if (resourceCancellationUnconfirmed()) {
         throw new RuntimeError('CANCELLATION_UNCONFIRMED', 'Remote tool cancellation was not confirmed')
       }
       return { status: 'cancelled' }
@@ -298,7 +307,7 @@ export class DeepAgentsRuntime implements RuntimeAdapter {
 
   #success(last: unknown): AdapterOutcome {
     return {
-      finalReply: AIMessage.isInstance(last) && typeof last.content === 'string' ? last.content : '',
+      finalReply: AIMessage.isInstance(last) ? messageText(last) : '',
       status: 'succeeded'
     }
   }

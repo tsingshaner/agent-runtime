@@ -36,7 +36,7 @@ export const openResources = async (
   try {
     await client.connect(
       new StreamableHTTPClientTransport(new URL(snapshot.url), {
-        requestInit: { headers: { Authorization: snapshot.token } }
+        requestInit: { headers: { Authorization: snapshot.token }, signal }
       })
     )
     const listed = await client.listTools({}, { signal, timeout: 10000 })

@@ -6,6 +6,12 @@ import { RuntimeError } from '@qingshaner/runtime'
 
 import type { AdapterNotice } from '@qingshaner/runtime'
 
+export const messageText = (message: BaseMessage): string => {
+  return typeof message.content === 'string'
+    ? message.content
+    : message.content.map((p) => (p.type === 'text' ? p.text : '')).join('')
+}
+
 export class Events {
   #current?: string
   readonly #calls = new Set<string>()
@@ -25,10 +31,7 @@ export class Events {
     if (!AIMessage.isInstance(message)) {
       return
     }
-    const text =
-      typeof message.content === 'string'
-        ? message.content
-        : message.content.map((p) => (p.type === 'text' ? p.text : '')).join('')
+    const text = messageText(message)
     if (!text) {
       return
     }
@@ -94,5 +97,29 @@ export class Events {
         kind: 'event'
       })
     }
+  }
+}
+
+/** Bound model callbacks queued inside LangGraph ahead of the durable event sink. */
+export class StreamBudget {
+  readonly #sizes: number[] = []
+  #bytes = 0
+  constructor(readonly controller: AbortController) {}
+  readonly callback = {
+    awaitHandlers: true,
+    handleLLMNewToken: (...args: unknown[]) => {
+      const size = Buffer.byteLength(JSON.stringify(args))
+      if (this.#sizes.length >= 1024 || this.#bytes + size > 1048576) {
+        this.controller.abort(new RuntimeError('STREAM_OVERFLOW', 'Native event queue exceeded its limit'))
+        return Promise.resolve()
+      }
+      this.#sizes.push(size)
+      this.#bytes += size
+      return Promise.resolve()
+    },
+    name: 'RuntimeStreamBudget'
+  }
+  consumed() {
+    this.#bytes -= this.#sizes.shift() ?? 0
   }
 }

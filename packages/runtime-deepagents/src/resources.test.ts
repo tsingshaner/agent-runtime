@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -171,4 +171,44 @@ describe('Deep Agents project resources', () => {
     },
     30000
   )
+  test('keeps remote cancellation unconfirmed after the native abort race', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deep-remote-abort-'))
+    const mcp = await Mcp.open(join(dir, 'mcp'))
+    const manager = await RuntimeManager.open({
+      dataDir: join(dir, 'manager'),
+      resources: new ProjectResources({ mcp }),
+      runtimes: [
+        new DeepAgentsRuntime({ approvalTools: [], dataDir: join(dir, 'native'), model: () => new ResourceModel({}) })
+      ]
+    })
+    try {
+      const project = await manager.createProject({ name: 'test' })
+      const entry = await mcp.create({
+        args: [resolve(import.meta.dirname, '../test/mcp.fixture.ts')],
+        command: process.execPath,
+        name: 'slow-tools',
+        transport: 'stdio'
+      })
+      await mcp.bind(project.id, entry.id, true)
+      const session = await manager.createSession({
+        cwd: dir,
+        model: 'fixture',
+        projectId: project.id,
+        runtime: 'deepagents'
+      })
+      const startedFile = join(dir, 'started')
+      const run = await manager.run(session.id, { text: JSON.stringify({ args: { startedFile }, name: 'echo' }) })
+      await expect.poll(() => readFile(startedFile, 'utf8').catch(() => ''), { timeout: 10000 }).toBe('started')
+      await manager.cancel(run.runId)
+      await Array.fromAsync(manager.subscribe(run.runId))
+      expect(await manager.getRun(run.runId)).toMatchObject({
+        error: { code: 'CANCELLATION_UNCONFIRMED' },
+        status: 'failed'
+      })
+    } finally {
+      await manager.dispose()
+      await mcp.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  }, 30000)
 })

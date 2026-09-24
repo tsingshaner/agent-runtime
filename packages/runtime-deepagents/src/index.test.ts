@@ -324,4 +324,49 @@ describe('Deep Agents through Manager', () => {
       await rm(dir, { force: true, recursive: true })
     }
   }, 30000)
+  test('fails explicitly when a native producer outruns a slow event sink', async () => {
+    class BurstModel extends Model {
+      async *_streamResponseChunks(_messages: BaseMessage[], _options: unknown, runManager?: CallbackManagerForLLMRun) {
+        for (let i = 0; i < 1200; i++) {
+          const chunk = new ChatGenerationChunk({ message: new AIMessageChunk({ content: 'x' }), text: 'x' })
+          await runManager?.handleLLMNewToken('x', undefined, undefined, undefined, undefined, { chunk })
+          yield chunk
+        }
+      }
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'deep-overflow-'))
+    const adapter = new DeepAgentsRuntime({ dataDir: dir, model: () => new BurstModel({}) })
+    try {
+      const session = await adapter.createSession({ cwd: dir, model: 'fixture' })
+      await expect(
+        adapter.execute(session, { runId: 'r', sessionId: 's', text: 'burst' }, async (notice) => {
+          if (notice.kind === 'event') {
+            await setTimeout(1)
+          }
+        })
+      ).rejects.toMatchObject({ code: 'STREAM_OVERFLOW' })
+    } finally {
+      await adapter.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  }, 30000)
+  test('preserves structured text content as the final reply for memory', async () => {
+    class BlocksModel extends Model {
+      _generate() {
+        const message = new AIMessage({ content: [{ text: 'final answer', type: 'text' }] })
+        return Promise.resolve({ generations: [{ message, text: 'final answer' }] })
+      }
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'deep-blocks-'))
+    const adapter = new DeepAgentsRuntime({ dataDir: dir, model: () => new BlocksModel({}) })
+    try {
+      const session = await adapter.createSession({ cwd: dir, model: 'fixture' })
+      expect(
+        await adapter.execute(session, { runId: 'r', sessionId: 's', text: 'question' }, () => Promise.resolve())
+      ).toEqual({ finalReply: 'final answer', status: 'succeeded' })
+    } finally {
+      await adapter.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  })
 })

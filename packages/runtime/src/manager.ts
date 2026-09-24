@@ -77,32 +77,44 @@ const ManagerOptionsSchema = z.strictObject({
  * Owns durable sessions, background runs, approvals, and registered runtime adapters.
  */
 export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
-  private sharedUpdating = false
-  private readonly updating = new Map<string, Promise<void>>()
-  private readonly preparations = new Map<string, Promise<void>>()
-  private readonly memoryTasks = new Set<Promise<void>>()
-  private readonly active = new Map<string, { done: Promise<void>; adapter: RuntimeAdapter; projectId: string }>()
-  private readonly controls = new Set<Promise<unknown>>()
-  private readonly storageOperations = new Set<Promise<unknown>>()
-  private stop!: () => void
-  private readonly stopped = new Promise<void>((resolve) => {
-    this.stop = resolve
+  #sharedUpdating = false
+  readonly #updating = new Map<string, Promise<void>>()
+  readonly #preparations = new Map<string, Promise<void>>()
+  readonly #memoryTasks = new Set<Promise<void>>()
+  readonly #active = new Map<string, { done: Promise<void>; adapter: RuntimeAdapter; projectId: string }>()
+  readonly #controls = new Set<Promise<unknown>>()
+  readonly #storageOperations = new Set<Promise<unknown>>()
+  #stop!: () => void
+  readonly #stopped = new Promise<void>((resolve) => {
+    this.#stop = resolve
   })
-  private stopping = false
-  private storeClosed = false
-  private readonly ready = new Map<string, Promise<void>>()
-  private readonly cancellations = new Map<string, Promise<void>>()
-  private closing = false
-  private closePromise?: Promise<void>
-  private fatal: RuntimeError | null = null
+  #stopping = false
+  #storeClosed = false
+  readonly #ready = new Map<string, Promise<void>>()
+  readonly #cancellations = new Map<string, Promise<void>>()
+  #closing = false
+  #closePromise?: Promise<void>
+  #fatal: RuntimeError | null = null
+
+  readonly #store: SessionStore
+  readonly #adapters: Map<string, RuntimeAdapter>
+  readonly #memory: MemoryProvider | undefined
+  readonly #memoryTimeoutMs: number
+  readonly #resources: ProjectResources | undefined
 
   private constructor(
-    private readonly store: SessionStore,
-    private readonly adapters: Map<string, RuntimeAdapter>,
-    private readonly memory?: MemoryProvider,
-    private readonly memoryTimeoutMs = 5000,
-    private readonly resources?: ProjectResources
-  ) {}
+    store: SessionStore,
+    adapters: Map<string, RuntimeAdapter>,
+    memory?: MemoryProvider,
+    memoryTimeoutMs = 5000,
+    resources?: ProjectResources
+  ) {
+    this.#store = store
+    this.#adapters = adapters
+    this.#memory = memory
+    this.#memoryTimeoutMs = memoryTimeoutMs
+    this.#resources = resources
+  }
 
   /**
    * Open the persistent store and mark unfinished runs from a previous host as interrupted.
@@ -135,8 +147,8 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
 
   /** Create a stable project without starting a runtime. */
   async createProject(input: CreateProjectInput): Promise<Project> {
-    this.assertProjectReady('')
-    return await this.control(async () => {
+    this.#assertProjectReady('')
+    return await this.#control(async () => {
       const value = parseInput(
         z.strictObject({
           id: z.optional(NonBlankString),
@@ -145,41 +157,41 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
         }),
         input
       )
-      const workingDirectories = await this.projectDirectories(value.workingDirectories)
-      return await this.storage(() =>
-        this.store.insertProject({ ...value, id: value.id ?? randomUUID(), workingDirectories })
+      const workingDirectories = await this.#projectDirectories(value.workingDirectories)
+      return await this.#storage(() =>
+        this.#store.insertProject({ ...value, id: value.id ?? randomUUID(), workingDirectories })
       )
     })
   }
 
   /** Read a project's durable identity and directory bindings. */
   async getProject(id: string): Promise<Project> {
-    this.assertOpen()
-    return await this.storage(() => this.store.getProject(id))
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.getProject(id))
   }
 
   /** List projects in descending creation order. */
   async listProjects(page?: { limit?: number; cursor?: string }): Promise<Page<Project>> {
-    this.assertOpen()
-    return await this.storage(() => this.store.listProjects(page))
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.listProjects(page))
   }
 
   /** Change directory bindings or name without changing project or session identity. */
   async updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
-    return await this.control(async () => {
+    return await this.#control(async () => {
       const value = parseInput(
         z.strictObject({ name: z.optional(TitleSchema), workingDirectories: z.optional(z.array(NonBlankString)) }),
         input
       )
       const workingDirectories =
-        value.workingDirectories === undefined ? undefined : await this.projectDirectories(value.workingDirectories)
-      return await this.storage(() =>
-        this.store.updateProject(id, { ...value, ...(workingDirectories === undefined ? {} : { workingDirectories }) })
+        value.workingDirectories === undefined ? undefined : await this.#projectDirectories(value.workingDirectories)
+      return await this.#storage(() =>
+        this.#store.updateProject(id, { ...value, ...(workingDirectories === undefined ? {} : { workingDirectories }) })
       )
     })
   }
 
-  private async projectDirectories(paths: string[]): Promise<string[]> {
+  async #projectDirectories(paths: string[]): Promise<string[]> {
     try {
       return [
         ...new Set(
@@ -206,11 +218,11 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @returns The SDK-managed session with its native identity and effective options.
    */
   async createSession(input: CreateSessionInput<A>): Promise<Session> {
-    return await this.control(async () => {
+    return await this.#control(async () => {
       const validated = parseInput(CreateSessionSchema, input)
       const title = parseInput(TitleSchema, validated.title ?? validated.projectId)
-      const adapter = this.getAdapter(validated.runtime)
-      await this.storage(() => this.store.getProject(validated.projectId))
+      const adapter = this.#getAdapter(validated.runtime)
+      await this.#storage(() => this.#store.getProject(validated.projectId))
       let cwd: string
       try {
         cwd = await realpath(validated.cwd)
@@ -220,18 +232,18 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       } catch (cause) {
         throw new RuntimeError('INVALID_INPUT', 'cwd must be an existing directory', { cause })
       }
-      this.assertRunning()
-      this.assertProjectReady(validated.projectId)
-      await this.prepareProjectResources(validated.projectId, adapter)
+      this.#assertRunning()
+      this.#assertProjectReady(validated.projectId)
+      await this.#prepareProjectResources(validated.projectId, adapter)
       const native = await adapter.createSession({
         cwd,
         model: validated.model,
         options: validated.options,
         projectId: validated.projectId
       })
-      this.assertRunning()
-      return this.storage(() =>
-        this.store.insertSession({
+      this.#assertRunning()
+      return this.#storage(() =>
+        this.#store.insertSession({
           cwd: native.cwd,
           id: randomUUID(),
           model: validated.model,
@@ -251,27 +263,27 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @throws {@link RuntimeError} if the session is not in this store.
    */
   async getSession(sessionId: string): Promise<Session> {
-    this.assertOpen()
-    return await this.storage(() => this.store.getSession(sessionId))
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.getSession(sessionId))
   }
 
   /**
    * List managed sessions from newest to oldest; excludes archived sessions by default.
    */
   async listSessions(filter?: SessionFilter): Promise<Page<Session>> {
-    this.assertOpen()
-    return await this.storage(() => this.store.listSessions(filter))
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.listSessions(filter))
   }
 
   /**
    * Load a persisted session in its native runtime without starting a run.
    */
   async resumeSession(sessionId: string): Promise<Session> {
-    return await this.control(async () => {
-      const session = await this.storage(() => this.store.getSession(sessionId))
-      this.assertRunning()
-      this.assertProjectReady(session.projectId)
-      await this.getAdapter(session.runtime).resumeSession(this.nativeSession(session))
+    return await this.#control(async () => {
+      const session = await this.#storage(() => this.#store.getSession(sessionId))
+      this.#assertRunning()
+      this.#assertProjectReady(session.projectId)
+      await this.#getAdapter(session.runtime).resumeSession(this.#nativeSession(session))
       return session
     })
   }
@@ -282,16 +294,16 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @throws {@link RuntimeError} if the session has an active run.
    */
   async archiveSession(sessionId: string): Promise<void> {
-    this.assertOpen()
-    await this.storage(() => this.store.setArchived(sessionId, true))
+    this.#assertOpen()
+    await this.#storage(() => this.#store.setArchived(sessionId, true))
   }
 
   /**
    * Restore an archived session to the default session listing.
    */
   async unarchiveSession(sessionId: string): Promise<void> {
-    this.assertOpen()
-    await this.storage(() => this.store.setArchived(sessionId, false))
+    this.#assertOpen()
+    await this.#storage(() => this.#store.setArchived(sessionId, false))
   }
 
   /**
@@ -305,40 +317,40 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @throws {@link RuntimeError} if the session is archived or already has an active run.
    */
   async run(sessionId: string, input: RunInput): Promise<{ runId: string; sessionId: string }> {
-    return await this.control(async () => {
+    return await this.#control(async () => {
       const validated = parseInput(RunInputSchema, input)
-      const session = await this.storage(() => this.store.getSession(sessionId))
-      this.assertRunning()
-      const existing = await this.storage(() => this.store.getRequestedRun(sessionId, validated))
+      const session = await this.#storage(() => this.#store.getSession(sessionId))
+      this.#assertRunning()
+      const existing = await this.#storage(() => this.#store.getRequestedRun(sessionId, validated))
       if (existing) {
         return { runId: existing.id, sessionId }
       }
-      this.assertProjectReady(session.projectId)
-      const adapter = this.getAdapter(session.runtime)
+      this.#assertProjectReady(session.projectId)
+      const adapter = this.#getAdapter(session.runtime)
       const runId = randomUUID()
-      const run = await this.storage(() => this.store.beginRun(sessionId, runId, validated))
+      const run = await this.#storage(() => this.#store.beginRun(sessionId, runId, validated))
       if (run.id !== runId) {
         return { runId: run.id, sessionId }
       }
-      this.assertRunning()
+      this.#assertRunning()
       let signalReady!: () => void
-      this.ready.set(
+      this.#ready.set(
         runId,
         new Promise<void>((resolve) => {
           signalReady = resolve
         })
       )
-      const completion = this.drive(adapter, session, runId, { text: validated.text }, signalReady)
+      const completion = this.#drive(adapter, session, runId, { text: validated.text }, signalReady)
         .catch((error: unknown) => {
-          this.failStorage(error)
+          this.#failStorage(error)
         })
         .finally(() => {
           signalReady()
-          this.active.delete(runId)
-          this.ready.delete(runId)
-          this.cancellations.delete(runId)
+          this.#active.delete(runId)
+          this.#ready.delete(runId)
+          this.#cancellations.delete(runId)
         })
-      this.active.set(runId, { adapter, done: completion, projectId: session.projectId })
+      this.#active.set(runId, { adapter, done: completion, projectId: session.projectId })
       return { runId, sessionId }
     })
   }
@@ -347,16 +359,16 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * Read a persisted run by its SDK ID.
    */
   async getRun(runId: string): Promise<Run> {
-    this.assertOpen()
-    return await this.storage(() => this.store.getRun(runId))
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.getRun(runId))
   }
 
   /**
    * List a session's runs from newest to oldest using an opaque pagination cursor.
    */
   async listRuns(sessionId: string, page?: { limit?: number; cursor?: string }): Promise<Page<Run>> {
-    this.assertOpen()
-    return await this.storage(() => this.store.listRuns(sessionId, page))
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.listRuns(sessionId, page))
   }
 
   /**
@@ -368,8 +380,8 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @throws {@link RuntimeError} during iteration if the cursor is invalid or events were cleared.
    */
   subscribe(runId: string, options?: { afterSequence?: number; signal?: AbortSignal }): AsyncIterable<EventEnvelope> {
-    this.assertOpen()
-    return this.store.subscribe(runId, options)
+    this.#assertOpen()
+    return this.#store.subscribe(runId, options)
   }
 
   /**
@@ -378,35 +390,35 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @throws {@link RuntimeError} if the run is still active.
    */
   async clearRunEvents(runId: string): Promise<void> {
-    this.assertOpen()
-    await this.storage(() => this.store.clearRunEvents(runId))
+    this.#assertOpen()
+    await this.#storage(() => this.#store.clearRunEvents(runId))
   }
 
   /**
    * List pending and responding approvals, including responses awaiting native confirmation.
    */
   async listPendingApprovals(runId: string): Promise<Approval[]> {
-    this.assertOpen()
-    return await this.storage(() => this.store.listPendingApprovals(runId))
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.listPendingApprovals(runId))
   }
 
   /** Query unanswered inputs, including responses awaiting native confirmation. */
   async listPendingInputs(runId: string): Promise<InputRequest[]> {
-    this.assertOpen()
-    return await this.storage(() => this.store.listPendingInputs(runId))
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.listPendingInputs(runId))
   }
 
   /** Claim one input response durably; uncertain sends cannot be repeated. */
   async respondInput(runId: string, inputId: string, answers: InputAnswers): Promise<void> {
-    return await this.control(async () => {
-      const run = await this.storage(() => this.store.getRun(runId))
-      const session = await this.storage(() => this.store.getSession(run.sessionId))
-      const adapter = this.getAdapter(session.runtime)
+    return await this.#control(async () => {
+      const run = await this.#storage(() => this.#store.getRun(runId))
+      const session = await this.#storage(() => this.#store.getSession(run.sessionId))
+      const adapter = this.#getAdapter(session.runtime)
       if (!adapter.respondInput) {
         throw new RuntimeError('UNSUPPORTED_INPUT', 'Runtime does not support input responses')
       }
-      const request = await this.storage(() => this.store.claimInput(runId, inputId, answers))
-      this.assertRunning()
+      const request = await this.#storage(() => this.#store.claimInput(runId, inputId, answers))
+      this.#assertRunning()
       try {
         await adapter.respondInput(runId, request.nativeRequestId, request.answers as InputAnswers)
       } catch (cause) {
@@ -424,12 +436,12 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @throws {@link RuntimeError} if the approval cannot be claimed or its response is unconfirmed.
    */
   async respondApproval(runId: string, approvalId: string, decision: ApprovalDecision): Promise<void> {
-    return await this.control(async () => {
-      const run = await this.storage(() => this.store.getRun(runId))
-      const session = await this.storage(() => this.store.getSession(run.sessionId))
-      const adapter = this.getAdapter(session.runtime)
-      const approval = await this.storage(() => this.store.claimApproval(runId, approvalId, decision))
-      this.assertRunning()
+    return await this.#control(async () => {
+      const run = await this.#storage(() => this.#store.getRun(runId))
+      const session = await this.#storage(() => this.#store.getSession(run.sessionId))
+      const adapter = this.#getAdapter(session.runtime)
+      const approval = await this.#storage(() => this.#store.claimApproval(runId, approvalId, decision))
+      this.#assertRunning()
       try {
         if (approval.batchId) {
           if (approval.batchSubmission) {
@@ -458,32 +470,32 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * Completion acknowledges the request; observe the run for its final status.
    */
   async cancel(runId: string): Promise<void> {
-    return await this.control(async () => {
-      let cancellation = this.cancellations.get(runId)
+    return await this.#control(async () => {
+      let cancellation = this.#cancellations.get(runId)
       if (!cancellation) {
-        cancellation = this.cancelRun(runId).finally(() => {
-          if (!this.active.has(runId)) {
-            this.cancellations.delete(runId)
+        cancellation = this.#cancelRun(runId).finally(() => {
+          if (!this.#active.has(runId)) {
+            this.#cancellations.delete(runId)
           }
         })
-        this.cancellations.set(runId, cancellation)
+        this.#cancellations.set(runId, cancellation)
       }
       await cancellation
     })
   }
 
-  private async cancelRun(runId: string): Promise<void> {
-    const run = await this.storage(() => this.store.markCancelling(runId))
+  async #cancelRun(runId: string): Promise<void> {
+    const run = await this.#storage(() => this.#store.markCancelling(runId))
     if (run.status !== 'cancelling') {
       return
     }
-    const session = await this.storage(() => this.store.getSession(run.sessionId))
-    const adapter = this.getAdapter(session.runtime)
-    await this.ready.get(runId)
-    if ((await this.storage(() => this.store.getRun(runId))).status !== 'cancelling') {
+    const session = await this.#storage(() => this.#store.getSession(run.sessionId))
+    const adapter = this.#getAdapter(session.runtime)
+    await this.#ready.get(runId)
+    if ((await this.#storage(() => this.#store.getRun(runId))).status !== 'cancelling') {
       return
     }
-    this.assertRunning()
+    this.#assertRunning()
     try {
       await adapter.cancel(runId)
     } catch (cause) {
@@ -503,12 +515,12 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @throws An AggregateError if resource cleanup fails.
    */
   dispose(): Promise<void> {
-    this.closing = true
-    this.closePromise ??= this.closeResources()
-    return this.closePromise
+    this.#closing = true
+    this.#closePromise ??= this.#closeResources()
+    return this.#closePromise
   }
 
-  private async closeResources(): Promise<void> {
+  async #closeResources(): Promise<void> {
     const errors: unknown[] = []
     const attempt = async (operation: () => Promise<unknown>) => {
       try {
@@ -517,13 +529,13 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
         errors.push(error)
       }
     }
-    await attempt(() => this.bounded(Promise.allSettled(this.controls), 'Accepted operations'))
+    await attempt(() => this.#bounded(Promise.allSettled(this.#controls), 'Accepted operations'))
     await attempt(() =>
-      this.bounded(
+      this.#bounded(
         (async () => {
-          const cancellations = [...this.active].map(
+          const cancellations = [...this.#active].map(
             ([runId, { adapter }]) =>
-              this.cancellations.get(runId) ?? (this.fatal ? adapter.cancel(runId) : this.cancelRun(runId))
+              this.#cancellations.get(runId) ?? (this.#fatal ? adapter.cancel(runId) : this.#cancelRun(runId))
           )
           const results = await Promise.allSettled(cancellations)
           for (const result of results) {
@@ -531,49 +543,51 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
               errors.push(result.reason)
             }
           }
-          await Promise.all([...this.active.values()].map(({ done }) => done))
+          await Promise.all([...this.#active.values()].map(({ done }) => done))
         })(),
         'Run cancellation'
       )
     )
     // No continuation of a timed out control operation may start more native work.
-    this.stopping = true
+    this.#stopping = true
     await Promise.all(
-      [...this.adapters.values()].map((adapter) =>
+      [...this.#adapters.values()].map((adapter) =>
         attempt(() =>
-          this.bounded(
+          this.#bounded(
             Promise.resolve().then(() => adapter.dispose()),
             'Adapter disposal'
           )
         )
       )
     )
-    await attempt(() => this.bounded(this.resources?.dispose() ?? Promise.resolve(), 'Resource disposal'))
-    this.stop()
-    await attempt(() => this.bounded(Promise.all([...this.active.values()].map(({ done }) => done)), 'Run persistence'))
-    await attempt(() => this.bounded(Promise.all(this.memoryTasks), 'Memory persistence'))
+    await attempt(() => this.#bounded(this.#resources?.dispose() ?? Promise.resolve(), 'Resource disposal'))
+    this.#stop()
+    await attempt(() =>
+      this.#bounded(Promise.all([...this.#active.values()].map(({ done }) => done)), 'Run persistence')
+    )
+    await attempt(() => this.#bounded(Promise.all(this.#memoryTasks), 'Memory persistence'))
     // Seal the boundary before draining: late adapter callbacks can no longer enqueue I/O.
-    this.storeClosed = true
+    this.#storeClosed = true
     await attempt(async () => {
       try {
-        await this.bounded(Promise.allSettled(this.storageOperations), 'Database operations')
+        await this.#bounded(Promise.allSettled(this.#storageOperations), 'Database operations')
       } catch (error) {
-        this.store.fail(
+        this.#store.fail(
           new RuntimeError('STORAGE_ERROR', 'Database operations did not drain; ownership retained', { cause: error })
         )
         throw error
       }
-      await this.bounded(this.store.close(), 'Database close')
+      await this.#bounded(this.#store.close(), 'Database close')
     })
-    if (this.fatal) {
-      errors.unshift(this.fatal)
+    if (this.#fatal) {
+      errors.unshift(this.#fatal)
     }
     if (errors.length > 0) {
-      throw new AggregateError(errors, 'Failed to close runtime resources', { cause: this.fatal ?? errors[0] })
+      throw new AggregateError(errors, 'Failed to close runtime resources', { cause: this.#fatal ?? errors[0] })
     }
   }
 
-  private async bounded<T>(operation: Promise<T>, label: string): Promise<T> {
+  async #bounded<T>(operation: Promise<T>, label: string): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
@@ -587,24 +601,24 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     }
   }
 
-  private control<T>(operation: () => Promise<T>): Promise<T> {
-    this.assertOpen()
-    const pending = operation().finally(() => this.controls.delete(pending))
-    this.controls.add(pending)
+  #control<T>(operation: () => Promise<T>): Promise<T> {
+    this.#assertOpen()
+    const pending = operation().finally(() => this.#controls.delete(pending))
+    this.#controls.add(pending)
     return pending
   }
 
-  private storage<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.fatal) {
-      return Promise.reject(this.fatal)
+  #storage<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.#fatal) {
+      return Promise.reject(this.#fatal)
     }
-    if (this.storeClosed) {
+    if (this.#storeClosed) {
       return Promise.reject(new RuntimeError('DISPOSED', 'Manager disposed'))
     }
     const pending = Promise.resolve()
       .then(() => {
-        if (this.fatal) {
-          throw this.fatal
+        if (this.#fatal) {
+          throw this.#fatal
         }
         return operation()
       })
@@ -612,60 +626,60 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
         if (error instanceof RuntimeError && error.code !== 'STORAGE_ERROR') {
           throw error
         }
-        throw this.failStorage(error)
+        throw this.#failStorage(error)
       })
-      .finally(() => this.storageOperations.delete(pending))
-    this.storageOperations.add(pending)
+      .finally(() => this.#storageOperations.delete(pending))
+    this.#storageOperations.add(pending)
     return pending
   }
 
-  private failStorage(cause: unknown): RuntimeError {
-    if (!this.fatal) {
-      this.fatal =
+  #failStorage(cause: unknown): RuntimeError {
+    if (!this.#fatal) {
+      this.#fatal =
         cause instanceof RuntimeError && cause.code === 'STORAGE_ERROR'
           ? cause
           : new RuntimeError('STORAGE_ERROR', 'Runtime persistence failed', { cause })
-      this.store.fail(this.fatal)
-      for (const [runId, { adapter }] of this.active) {
+      this.#store.fail(this.#fatal)
+      for (const [runId, { adapter }] of this.#active) {
         void Promise.resolve()
           .then(() => adapter.cancel(runId))
           .catch(() => {})
       }
     }
-    return this.fatal
+    return this.#fatal
   }
 
-  private assertRunning(): void {
-    if (this.fatal) {
-      throw this.fatal
+  #assertRunning(): void {
+    if (this.#fatal) {
+      throw this.#fatal
     }
-    if (this.stopping) {
+    if (this.#stopping) {
       throw new RuntimeError('DISPOSED', 'Manager is closing or disposed')
     }
   }
 
-  private assertOpen(): void {
-    if (this.fatal) {
-      throw this.fatal
+  #assertOpen(): void {
+    if (this.#fatal) {
+      throw this.#fatal
     }
-    if (this.closing) {
+    if (this.#closing) {
       throw new RuntimeError('DISPOSED', 'Manager is closing or disposed')
     }
   }
 
-  private getAdapter(kind: string): RuntimeAdapter {
-    const adapter = this.adapters.get(kind)
+  #getAdapter(kind: string): RuntimeAdapter {
+    const adapter = this.#adapters.get(kind)
     if (!adapter) {
       throw new RuntimeError('RUNTIME_UNAVAILABLE', `Runtime is unavailable: ${kind}`)
     }
     return adapter
   }
 
-  private nativeSession({ nativeSessionId, cwd, options, projectId, model }: Session): NativeSession {
+  #nativeSession({ nativeSessionId, cwd, options, projectId, model }: Session): NativeSession {
     return { cwd, nativeSessionId, options, projectId, ...(model === null ? {} : { model }) }
   }
 
-  private async drive(
+  async #drive(
     adapter: RuntimeAdapter,
     session: Session,
     runId: string,
@@ -674,13 +688,13 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
   ): Promise<void> {
     let outcome: AdapterOutcome
     try {
-      this.assertRunning()
-      await this.prepareProjectResources(session.projectId, adapter)
-      const native = this.nativeSession(session)
-      await Promise.race([adapter.resumeSession(native), this.stopped])
-      this.assertRunning()
-      const context = await this.recallMemory(session.projectId, runId, input.text)
-      this.assertRunning()
+      this.#assertRunning()
+      await this.#prepareProjectResources(session.projectId, adapter)
+      const native = this.#nativeSession(session)
+      await Promise.race([adapter.resumeSession(native), this.#stopped])
+      this.#assertRunning()
+      const context = await this.#recallMemory(session.projectId, runId, input.text)
+      this.#assertRunning()
       const execution = adapter.execute(
         native,
         { ...input, ...(context ? { context } : {}), runId, sessionId: session.id },
@@ -691,13 +705,13 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
           if (notice.kind === 'input' && !adapter.respondInput) {
             throw new RuntimeError('UNSUPPORTED_INPUT', 'Runtime cannot respond to input')
           }
-          return this.receive(runId, notice)
+          return this.#receive(runId, notice)
         }
       )
       ready()
       outcome = await Promise.race([
         execution,
-        this.stopped.then(() => ({
+        this.#stopped.then(() => ({
           error: { code: 'PROCESS_EXITED', message: 'Runtime shut down before run completion' },
           status: 'failed' as const
         }))
@@ -705,29 +719,29 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     } catch (error) {
       outcome = {
         error: {
-          code: this.stopping ? 'PROCESS_EXITED' : error instanceof RuntimeError ? error.code : 'RUN_FAILED',
+          code: this.#stopping ? 'PROCESS_EXITED' : error instanceof RuntimeError ? error.code : 'RUN_FAILED',
           message: error instanceof Error ? error.message : 'Run failed'
         },
         status: 'failed'
       }
     }
-    if (!this.fatal) {
-      await this.finishWithMemory(session, runId, input.text, outcome)
+    if (!this.#fatal) {
+      await this.#finishWithMemory(session, runId, input.text, outcome)
     }
   }
 
-  private assertProjectReady = (projectId: string): void => {
-    if (this.sharedUpdating || this.updating.has(projectId)) {
+  #assertProjectReady = (projectId: string): void => {
+    if (this.#sharedUpdating || this.#updating.has(projectId)) {
       throw new RuntimeError('RESOURCES_UPDATING', 'Project resources are updating')
     }
   }
-  private prepareProjectResources = (projectId: string, adapter: RuntimeAdapter): Promise<void> => {
-    const resources = this.resources
+  #prepareProjectResources = (projectId: string, adapter: RuntimeAdapter): Promise<void> => {
+    const resources = this.#resources
     if (!resources) {
       return Promise.resolve()
     }
     const key = `${projectId}:${adapter.kind}`
-    const existing = this.preparations.get(key)
+    const existing = this.#preparations.get(key)
     if (existing) {
       return existing
     }
@@ -743,20 +757,20 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
           error instanceof RuntimeError ? error.message : 'Enabled project resource unavailable'
         )
       }
-    })().finally(() => this.preparations.delete(key))
-    this.preparations.set(key, pending)
+    })().finally(() => this.#preparations.delete(key))
+    this.#preparations.set(key, pending)
     return pending
   }
 
-  private applyResources = async (ids: string[], change: () => Promise<void>): Promise<void> => {
-    await Promise.all([...this.active.values()].filter((run) => ids.includes(run.projectId)).map((run) => run.done))
-    this.assertRunning()
+  #applyResources = async (ids: string[], change: () => Promise<void>): Promise<void> => {
+    await Promise.all([...this.#active.values()].filter((run) => ids.includes(run.projectId)).map((run) => run.done))
+    this.#assertRunning()
     await change()
-    await Promise.all(ids.map((id) => this.resources?.release(id)))
+    await Promise.all(ids.map((id) => this.#resources?.release(id)))
     for (const id of ids) {
-      for (const adapter of this.adapters.values()) {
+      for (const adapter of this.#adapters.values()) {
         if (adapter.configureProject) {
-          await this.prepareProjectResources(id, adapter)
+          await this.#prepareProjectResources(id, adapter)
         }
       }
     }
@@ -764,58 +778,58 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
 
   /** Pause project admission while applying bindings after all existing runs finish. */
   updateProjectResources = (projectId: string, change: () => Promise<void>): Promise<void> => {
-    this.assertOpen()
+    this.#assertOpen()
     parseInput(NonBlankString, projectId)
-    this.assertProjectReady(projectId)
-    const accepted = [...this.controls]
+    this.#assertProjectReady(projectId)
+    const accepted = [...this.#controls]
     const pending = (async () => {
       await Promise.allSettled(accepted)
-      await this.storage(() => this.store.getProject(projectId))
-      await this.applyResources([projectId], change)
+      await this.#storage(() => this.#store.getProject(projectId))
+      await this.#applyResources([projectId], change)
     })().finally(() => {
-      this.updating.delete(projectId)
-      this.controls.delete(pending)
+      this.#updating.delete(projectId)
+      this.#controls.delete(pending)
     })
-    this.updating.set(projectId, pending)
-    this.controls.add(pending)
+    this.#updating.set(projectId, pending)
+    this.#controls.add(pending)
     return pending
   }
 
   /** Shared skill/MCP changes must block new projects and bindings before enumerating consumers. */
   updateSharedResources = (change: () => Promise<void>): Promise<void> => {
-    this.assertOpen()
-    this.assertProjectReady('')
-    const accepted = [...this.controls]
-    this.sharedUpdating = true
+    this.#assertOpen()
+    this.#assertProjectReady('')
+    const accepted = [...this.#controls]
+    this.#sharedUpdating = true
     const pending = (async () => {
       await Promise.allSettled(accepted)
       const ids: string[] = []
       let cursor: string | undefined
       do {
-        const page = await this.storage(() => this.store.listProjects({ cursor, limit: 200 }))
+        const page = await this.#storage(() => this.#store.listProjects({ cursor, limit: 200 }))
         ids.push(...page.items.map(({ id }) => id))
         cursor = page.nextCursor ?? undefined
       } while (cursor)
-      await this.applyResources(ids, change)
+      await this.#applyResources(ids, change)
     })().finally(() => {
-      this.sharedUpdating = false
-      this.controls.delete(pending)
+      this.#sharedUpdating = false
+      this.#controls.delete(pending)
     })
-    this.controls.add(pending)
+    this.#controls.add(pending)
     return pending
   }
 
-  private recallMemory = async (projectId: string, runId: string, text: string): Promise<string | undefined> => {
-    const memory = this.memory
+  #recallMemory = async (projectId: string, runId: string, text: string): Promise<string | undefined> => {
+    const memory = this.#memory
     if (!memory) {
       return undefined
     }
     try {
-      const recalled = await this.memoryRequest(() => memory.recall(projectId, text))
+      const recalled = await this.#memoryRequest(() => memory.recall(projectId, text))
       return parseInput(z.string().check(z.maxLength(32000)), recalled.context)
     } catch {
-      await this.storage(() =>
-        this.store.setMemoryError(runId, {
+      await this.#storage(() =>
+        this.#store.setMemoryError(runId, {
           code: 'MEMORY_RECALL_FAILED',
           message: 'Memory recall unavailable; continuing without recall'
         })
@@ -823,14 +837,9 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       return undefined
     }
   }
-  private finishWithMemory = async (
-    session: Session,
-    runId: string,
-    text: string,
-    outcome: AdapterOutcome
-  ): Promise<void> => {
+  #finishWithMemory = async (session: Session, runId: string, text: string, outcome: AdapterOutcome): Promise<void> => {
     const memory: MemoryWrite | undefined =
-      this.memory && outcome.status === 'succeeded'
+      this.#memory && outcome.status === 'succeeded'
         ? {
             assistant: outcome.finalReply ?? '',
             error:
@@ -844,57 +853,57 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
             user: text
           }
         : undefined
-    await this.storage(() => this.store.finishRun(runId, outcome, memory))
+    await this.#storage(() => this.#store.finishRun(runId, outcome, memory))
     if (memory?.status === 'pending') {
-      const task = this.writeMemory(memory)
+      const task = this.#writeMemory(memory)
         .catch((error: unknown) => {
-          this.failStorage(error)
+          this.#failStorage(error)
         })
-        .finally(() => this.memoryTasks.delete(task))
-      this.memoryTasks.add(task)
+        .finally(() => this.#memoryTasks.delete(task))
+      this.#memoryTasks.add(task)
     }
   }
 
   getMemoryWrite = (runId: string): Promise<MemoryWrite | null> => {
-    this.assertOpen()
-    return this.storage(() => this.store.getMemoryWrite(runId))
+    this.#assertOpen()
+    return this.#storage(() => this.#store.getMemoryWrite(runId))
   }
   listMemoryWrites = (projectId: string): Promise<MemoryWrite[]> => {
-    this.assertOpen()
-    return this.storage(() => this.store.listMemoryWrites(projectId))
+    this.#assertOpen()
+    return this.#storage(() => this.#store.listMemoryWrites(projectId))
   }
-  private memoryRequest = async <T>(operation: () => Promise<T>): Promise<T> => {
+  #memoryRequest = async <T>(operation: () => Promise<T>): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
         Promise.resolve().then(operation),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Memory timeout')), this.memoryTimeoutMs)
+          timer = setTimeout(() => reject(new Error('Memory timeout')), this.#memoryTimeoutMs)
         })
       ])
     } finally {
       clearTimeout(timer)
     }
   }
-  private writeMemory = async (record: MemoryWrite): Promise<void> => {
-    const memory = this.memory
+  #writeMemory = async (record: MemoryWrite): Promise<void> => {
+    const memory = this.#memory
     if (!memory) {
       return
     }
     // Mark uncertainty before network I/O. A crash after this commit must never replay the write.
-    await this.storage(() =>
-      this.store.finishMemoryWrite(record.runId, {
+    await this.#storage(() =>
+      this.#store.finishMemoryWrite(record.runId, {
         error: { code: 'MEMORY_WRITE_UNCERTAIN', message: 'Memory write not confirmed; do not retry automatically' },
         status: 'unknown'
       })
     )
-    if (this.storeClosed || this.stopping) {
+    if (this.#storeClosed || this.#stopping) {
       return
     }
     let result: Pick<MemoryWrite, 'status' | 'error'>
     try {
       const { projectId, sessionId, runId, user, assistant } = record
-      const receipt = await this.memoryRequest(() => memory.write({ assistant, projectId, runId, sessionId, user }))
+      const receipt = await this.#memoryRequest(() => memory.write({ assistant, projectId, runId, sessionId, user }))
       const status = parseInput(z.enum(['accepted', 'failed', 'unknown']), receipt.status)
       result = {
         error:
@@ -909,37 +918,37 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     } catch {
       return
     }
-    await this.storage(() => this.store.completeMemoryWrite(record.runId, result))
+    await this.#storage(() => this.#store.completeMemoryWrite(record.runId, result))
   }
 
-  private async receive(runId: string, notice: AdapterNotice): Promise<void> {
+  async #receive(runId: string, notice: AdapterNotice): Promise<void> {
     switch (notice.kind) {
       case 'approval-batch':
-        await this.storage(() => this.store.requestApprovalBatch(runId, notice.request))
+        await this.#storage(() => this.#store.requestApprovalBatch(runId, notice.request))
         return
       case 'approval-batch-resolved':
-        await this.storage(() =>
-          this.store.resolveApprovalBatch(runId, notice.nativeRequestId, notice.responseAttempted)
+        await this.#storage(() =>
+          this.#store.resolveApprovalBatch(runId, notice.nativeRequestId, notice.responseAttempted)
         )
         return
       case 'input':
-        await this.storage(() => this.store.requestInput(runId, notice.request))
+        await this.#storage(() => this.#store.requestInput(runId, notice.request))
         return
       case 'input-resolved':
-        await this.storage(() => this.store.resolveInput(runId, notice.nativeRequestId, notice.responseAttempted))
+        await this.#storage(() => this.#store.resolveInput(runId, notice.nativeRequestId, notice.responseAttempted))
         return
       case 'started':
-        await this.storage(() => this.store.setNativeTurn(runId, notice.nativeTurnId))
+        await this.#storage(() => this.#store.setNativeTurn(runId, notice.nativeTurnId))
         return
       case 'event':
         parseEvent(notice.event)
-        await this.storage(() => this.store.appendEvent(runId, notice.event))
+        await this.#storage(() => this.#store.appendEvent(runId, notice.event))
         return
       case 'approval':
-        await this.storage(() => this.store.requestApproval(runId, notice.request))
+        await this.#storage(() => this.#store.requestApproval(runId, notice.request))
         return
       case 'approval-resolved':
-        await this.storage(() => this.store.resolveApproval(runId, notice.nativeRequestId, notice.responseAttempted))
+        await this.#storage(() => this.#store.resolveApproval(runId, notice.nativeRequestId, notice.responseAttempted))
         return
     }
   }

@@ -53,16 +53,20 @@ const checkTree = async (directory: string): Promise<void> => {
 
 /** Owns copies only, with explicit persisted project allowlists. */
 export class Skills {
-  private queue: Promise<unknown> = Promise.resolve()
-  private constructor(private readonly directory: string) {}
+  #queue: Promise<unknown> = Promise.resolve()
+  readonly #directory: string
+
+  private constructor(directory: string) {
+    this.#directory = directory
+  }
   static open = async (dataDir: string): Promise<Skills> => {
     parse(key, dataDir)
     await mkdir(dataDir, { recursive: true })
     return new Skills(await realpath(dataDir))
   }
-  private load = async (): Promise<State> => {
+  #load = async (): Promise<State> => {
     try {
-      return parse(stateSchema, JSON.parse(await readRegularFile(join(this.directory, 'skills.json'))))
+      return parse(stateSchema, JSON.parse(await readRegularFile(join(this.#directory, 'skills.json'))))
     } catch (error) {
       if (error instanceof FileError && error.code === 'NOT_FOUND') {
         return { bindings: {}, ids: [] }
@@ -70,46 +74,46 @@ export class Skills {
       throw error
     }
   }
-  private mutate = <T>(operation: (state: State) => Promise<T> | T): Promise<T> => {
-    const pending = this.queue.then(async () => {
-      const lock = join(this.directory, 'skills.lock')
+  #mutate = <T>(operation: (state: State) => Promise<T> | T): Promise<T> => {
+    const pending = this.#queue.then(async () => {
+      const lock = join(this.#directory, 'skills.lock')
       try {
         await mkdir(lock)
       } catch {
         throw new FileError('RESOURCE_BUSY', 'Skills are being updated')
       }
       try {
-        const state = await this.load()
+        const state = await this.#load()
         const result = await operation(state)
-        await atomicWrite(join(this.directory, 'skills.json'), JSON.stringify(state))
+        await atomicWrite(join(this.#directory, 'skills.json'), JSON.stringify(state))
         return result
       } finally {
         await rm(lock, { recursive: true })
       }
     })
-    this.queue = pending.catch(() => {})
+    this.#queue = pending.catch(() => {})
     return pending
   }
-  private skillDirectory = async (id: string): Promise<string> => {
+  #skillDirectory = async (id: string): Promise<string> => {
     parse(z.uuid(), id)
-    if (!(await this.load()).ids.includes(id)) {
+    if (!(await this.#load()).ids.includes(id)) {
       throw new FileError('NOT_FOUND', 'Skill not found')
     }
-    return resourcePath(this.directory, id)
+    return resourcePath(this.#directory, id)
   }
   import = (source: string): Promise<Skill> =>
-    this.mutate(async (state) => {
+    this.#mutate(async (state) => {
       parse(key, source)
       const root = await realpath(source)
-      const relation = relative(root, this.directory)
+      const relation = relative(root, this.#directory)
       if (!(relation && (relation === '..' || relation.startsWith('../') || relation.startsWith('/')))) {
         throw new FileError('INVALID_PATH', 'Source cannot contain the managed directory')
       }
       await checkTree(root)
       metadata(await readRegularFile(join(root, 'SKILL.md')))
       const id = randomUUID()
-      const staging = join(this.directory, `${id}.tmp`)
-      const target = join(this.directory, id)
+      const staging = join(this.#directory, `${id}.tmp`)
+      const target = join(this.#directory, id)
       try {
         await cp(root, staging, { dereference: false, errorOnExist: true, force: false, recursive: true })
         await checkTree(staging)
@@ -122,14 +126,14 @@ export class Skills {
       }
     })
   get = async (id: string): Promise<Skill> => {
-    const directory = await this.skillDirectory(id)
+    const directory = await this.#skillDirectory(id)
     return { directory, id, ...metadata(await readRegularFile(await resourcePath(directory, 'SKILL.md'))) }
   }
   list = async (projectId?: string): Promise<Skill[]> => {
     if (projectId !== undefined) {
       parse(key, projectId)
     }
-    const state = await this.load()
+    const state = await this.#load()
     const bindings =
       projectId !== undefined && Object.hasOwn(state.bindings, projectId) ? state.bindings[projectId] : undefined
     const ids = projectId === undefined ? state.ids : Object.keys(bindings ?? {})
@@ -139,7 +143,7 @@ export class Skills {
   }
   enabled = async (projectId: string): Promise<Skill[]> => {
     parse(key, projectId)
-    const state = await this.load()
+    const state = await this.#load()
     const bindings = Object.hasOwn(state.bindings, projectId) ? state.bindings[projectId] : undefined
     return Promise.all(
       Object.entries(bindings ?? {})
@@ -148,7 +152,7 @@ export class Skills {
     )
   }
   bind = (projectId: string, id: string, enabled: boolean): Promise<void> =>
-    this.mutate(async (state) => {
+    this.#mutate(async (state) => {
       parse(key, projectId)
       parse(z.boolean(), enabled)
       await this.get(id)
@@ -156,7 +160,7 @@ export class Skills {
       state.bindings = { ...state.bindings, [projectId]: { ...bindings, [id]: enabled } }
     })
   unbind = (projectId: string, id: string): Promise<void> =>
-    this.mutate((state) => {
+    this.#mutate((state) => {
       parse(key, projectId)
       parse(z.uuid(), id)
       if (Object.hasOwn(state.bindings, projectId)) {
@@ -164,11 +168,11 @@ export class Skills {
       }
     })
   read = async (id: string, path = 'SKILL.md'): Promise<string> =>
-    readRegularFile(await resourcePath(await this.skillDirectory(id), path))
+    readRegularFile(await resourcePath(await this.#skillDirectory(id), path))
   edit = (id: string, path: string, content: string): Promise<void> =>
-    this.mutate(async () => {
+    this.#mutate(async () => {
       parse(z.string(), content)
-      const target = await resourcePath(await this.skillDirectory(id), path)
+      const target = await resourcePath(await this.#skillDirectory(id), path)
       await readRegularFile(target)
       if (path === 'SKILL.md') {
         metadata(content)
@@ -176,14 +180,14 @@ export class Skills {
       await atomicWrite(target, content)
     })
   delete = (id: string): Promise<void> =>
-    this.mutate(async (state) => {
-      const target = await this.skillDirectory(id)
+    this.#mutate(async (state) => {
+      const target = await this.#skillDirectory(id)
       state.ids = state.ids.filter((value) => value !== id)
       for (const bindings of Object.values(state.bindings)) {
         delete bindings[id]
       }
       // Persist removal before deleting; a crash can leave an unreferenced copy, never a missing active skill.
-      await atomicWrite(join(this.directory, 'skills.json'), JSON.stringify(state))
+      await atomicWrite(join(this.#directory, 'skills.json'), JSON.stringify(state))
       await rm(target, { recursive: true })
     })
 }

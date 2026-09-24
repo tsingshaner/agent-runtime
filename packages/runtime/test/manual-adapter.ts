@@ -23,22 +23,22 @@ export class ManualAdapter implements RuntimeAdapter {
   readonly resumed: NativeSession[] = []
   readonly cancelled: string[] = []
   readonly executions = new Map<string, { sessionId: string; runId: string; text: string; context?: string }>()
-  private readonly active = new Map<
+  readonly #active = new Map<
     string,
     { emit: (notice: AdapterNotice) => Promise<void>; outcome: PromiseWithResolvers<AdapterOutcome> }
   >()
-  private readonly starts = new Map<string, PromiseWithResolvers<void>>()
+  readonly #starts = new Map<string, PromiseWithResolvers<void>>()
   readonly decisions: { runId: string; nativeRequestId: string | number; decision: ApprovalDecision }[] = []
   cancelError?: Error
   finishOnCancel = true
   approvalError?: Error
   confirmApprovals = true
   resumeGate?: Promise<void>
-  private disposed = false
+  #disposed = false
 
   /** Reset observations and controls after all executions have completed. */
   reset(): void {
-    if (this.active.size > 0 || this.disposed) {
+    if (this.#active.size > 0 || this.#disposed) {
       throw new Error('Cannot reset an active or disposed adapter')
     }
     this.created.length = 0
@@ -46,7 +46,7 @@ export class ManualAdapter implements RuntimeAdapter {
     this.cancelled.length = 0
     this.decisions.length = 0
     this.executions.clear()
-    this.starts.clear()
+    this.#starts.clear()
     this.cancelError = undefined
     this.approvalError = undefined
     this.resumeGate = undefined
@@ -81,20 +81,20 @@ export class ManualAdapter implements RuntimeAdapter {
     input: { sessionId: string; runId: string; text: string; context?: string },
     emit: (notice: AdapterNotice) => Promise<void>
   ): Promise<AdapterOutcome> {
-    if (this.disposed) {
+    if (this.#disposed) {
       throw new RuntimeError('DISPOSED', 'Adapter disposed')
     }
     if (!this.resumed.some(({ nativeSessionId }) => nativeSessionId === session.nativeSessionId)) {
       throw new Error('Session must be resumed before execution')
     }
     const outcome = Promise.withResolvers<AdapterOutcome>()
-    this.active.set(input.runId, { emit, outcome })
+    this.#active.set(input.runId, { emit, outcome })
     this.executions.set(input.runId, input)
-    this.starts.get(input.runId)?.resolve()
+    this.#starts.get(input.runId)?.resolve()
     try {
       return await outcome.promise
     } finally {
-      this.active.delete(input.runId)
+      this.#active.delete(input.runId)
     }
   }
 
@@ -102,16 +102,16 @@ export class ManualAdapter implements RuntimeAdapter {
     if (this.executions.has(runId)) {
       return Promise.resolve()
     }
-    let start = this.starts.get(runId)
+    let start = this.#starts.get(runId)
     if (!start) {
       start = Promise.withResolvers<void>()
-      this.starts.set(runId, start)
+      this.#starts.set(runId, start)
     }
     return start.promise
   }
 
   async push(runId: string, notice: AdapterNotice): Promise<void> {
-    const execution = this.active.get(runId)
+    const execution = this.#active.get(runId)
     if (!execution) {
       throw new Error(`Execution not started: ${runId}`)
     }
@@ -124,7 +124,7 @@ export class ManualAdapter implements RuntimeAdapter {
   }
 
   finish(runId: string, outcome: AdapterOutcome): void {
-    const execution = this.active.get(runId)
+    const execution = this.#active.get(runId)
     if (!execution) {
       throw new Error(`Execution not started: ${runId}`)
     }
@@ -173,8 +173,8 @@ export class ManualAdapter implements RuntimeAdapter {
   }
 
   dispose(): Promise<void> {
-    this.disposed = true
-    for (const { outcome } of this.active.values()) {
+    this.#disposed = true
+    for (const { outcome } of this.#active.values()) {
       outcome.resolve({ status: 'cancelled' })
     }
     return Promise.resolve()

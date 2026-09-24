@@ -45,7 +45,7 @@ export class RuntimeClient {
     let failure: unknown
     let terminal: Chunk | undefined
     try {
-      for await (const event of this.subscribe(runId, signal)) {
+      for await (const event of this.#subscribe(runId, signal)) {
         // Both packages use AG-UI wire events but currently ship distinct enum versions.
         const chunk = event as unknown as Chunk
         if (terminal) {
@@ -58,7 +58,7 @@ export class RuntimeClient {
         }
         if (chunk.type === 'CUSTOM') {
           interaction = interaction
-            .then(() => this.interact(runId, chunk, handlers, signal))
+            .then(() => this.#interact(runId, chunk, handlers, signal))
             .catch((error: unknown) => {
               if (!signal.aborted) {
                 failure = error
@@ -81,7 +81,7 @@ export class RuntimeClient {
     }
   }
 
-  private async *subscribe(runId: string, signal: AbortSignal) {
+  async *#subscribe(runId: string, signal: AbortSignal) {
     let lastEventId: string | undefined
     let terminal = false
     for (let attempt = 0; ; attempt++) {
@@ -110,7 +110,7 @@ export class RuntimeClient {
     }
   }
 
-  private interact = async (runId: string, chunk: Chunk, handlers: Handlers, signal: AbortSignal) => {
+  #interact = async (runId: string, chunk: Chunk, handlers: Handlers, signal: AbortSignal) => {
     signal.throwIfAborted()
     if (chunk.type !== 'CUSTOM') {
       return

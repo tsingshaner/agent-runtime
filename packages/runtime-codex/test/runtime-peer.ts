@@ -8,8 +8,12 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import { CodexRuntime } from '@qingshaner/runtime-codex'
+// biome-ignore lint/correctness/noUndeclaredDependencies: Test helper uses the workspace Vitest dependency.
+import { vi } from 'vitest'
 
 import type { Json } from '@qingshaner/runtime'
+
+import { JsonRpcClient } from '../src/client'
 
 export const fakePath = fileURLToPath(new URL('./fake-app-server.mjs', import.meta.url))
 export const cwd = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '')
@@ -23,6 +27,7 @@ type WireFrame = { id: number | string; method: string; params: Record<string, J
 type Control = { event: string; frame: WireFrame }
 
 export const peer = async (requestTimeoutMs = 1000, stateDir?: string) => {
+  const exits = vi.spyOn(JsonRpcClient.prototype, 'onExit')
   const server = createServer()
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -70,6 +75,7 @@ export const peer = async (requestTimeoutMs = 1000, stateDir?: string) => {
     shutdownTimeoutMs: 30
   })
   cleanup.push(async () => {
+    exits.mockRestore()
     await runtime.dispose()
     socket?.destroy()
     if (!stateDir) {
@@ -129,13 +135,11 @@ export const peer = async (requestTimeoutMs = 1000, stateDir?: string) => {
     create,
     exit: async () => {
       // Observe real transport completion; socket close can precede its exit listener.
-      const projects = Reflect.get(runtime, 'projects') as Map<string, Promise<object>>
-      const project = await [...projects.values()][0]
-      if (!project) {
-        throw new Error('Missing project')
+      const client = exits.mock.contexts.at(-1) as JsonRpcClient | undefined
+      if (!client) {
+        throw new Error('Missing transport')
       }
-      const client = Reflect.get(project, 'client') as object
-      const exited = Reflect.get(client, 'exited') as Promise<void>
+      const exited = new Promise<void>((resolve) => client.onExit(() => resolve()))
       await command({ action: 'exit' })
       await exited
     },

@@ -4,15 +4,15 @@ import { join } from 'node:path'
 
 import { EventType } from '@ag-ui/core'
 import { sql } from 'drizzle-orm'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { ManualAdapter } from '../test/manual-adapter'
 import { setupMemoryDatabase } from '../test/memory-database.fixture'
 import { RuntimeError } from './errors'
 import { acquireDirectoryLock } from './lock'
 import { RuntimeManager } from './manager'
+import { SessionStore } from './store'
 
-import type { SessionStore } from './store'
 import type { EventEnvelope, JsonObject } from './types'
 
 const collect = async (events: AsyncIterable<EventEnvelope>): Promise<EventEnvelope[]> => {
@@ -29,26 +29,28 @@ describe('RuntimeManager operations', () => {
   let dir: string
   let adapter: ManualAdapter
   let manager: RuntimeManager
+  let store: SessionStore
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'runtime-manager-'))
     adapter = new ManualAdapter()
+    store = await SessionStore.open(dir)
+    const opening = vi.spyOn(SessionStore, 'open').mockResolvedValueOnce(store)
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
+    opening.mockRestore()
     if ((await manager.listProjects()).items.length === 0) {
       await manager.createProject({ id: 'project', name: 'project' })
     }
   })
 
   afterEach(async () => {
-    // Test-only access: await the manager's final persistence and cleanup, not just the terminal event.
-    const active = Reflect.get(manager, 'active') as Map<string, { done: Promise<void> }>
-    const pending = [...active.values()].map(({ done }) => done)
-    await Promise.all([...active.keys()].map((runId) => manager.cancel(runId)))
-    await Promise.all(pending)
-    const store = Reflect.get(manager, 'store') as SessionStore
-    await store.db.execute(
-      sql`TRUNCATE TABLE memory_writes, input_requests, approvals, approval_batches, events, runs, sessions`
-    )
+    await Promise.all([...adapter.executions.keys()].map((runId) => manager.cancel(runId)))
+    // Resource updates wait for final persistence and run cleanup before invoking the callback.
+    await manager.updateSharedResources(async () => {
+      await store.db.execute(
+        sql`TRUNCATE TABLE memory_writes, input_requests, approvals, approval_batches, events, runs, sessions`
+      )
+    })
     adapter.reset()
     await Promise.all(['alias', 'file.txt'].map((name) => rm(join(dir, name), { force: true })))
   })

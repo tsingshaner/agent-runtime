@@ -51,21 +51,21 @@ const skillDigest = async (directory: string): Promise<string> => {
 
 /** One explicit resource set per project, shared by its sessions and closed after drain. */
 export class ProjectResources {
-  private readonly projects = new Map<
+  readonly #projects = new Map<
     string,
     Promise<{ fingerprint: string; snapshot: ResourceSnapshot; close: () => Promise<void>; check: () => Promise<void> }>
   >()
-  private readonly preparing = new Set<Promise<ResourceSnapshot>>()
-  private disposed = false
+  readonly #preparing = new Set<Promise<ResourceSnapshot>>()
+  #disposed = false
   constructor(readonly options: ResourceOptions) {}
 
   prepare = (projectId: string): Promise<ResourceSnapshot> => {
-    const pending = this.prepareProject(projectId).finally(() => this.preparing.delete(pending))
-    this.preparing.add(pending)
+    const pending = this.#prepareProject(projectId).finally(() => this.#preparing.delete(pending))
+    this.#preparing.add(pending)
     return pending
   }
-  private prepareProject = async (projectId: string): Promise<ResourceSnapshot> => {
-    if (this.disposed) {
+  #prepareProject = async (projectId: string): Promise<ResourceSnapshot> => {
+    if (this.#disposed) {
       throw new RuntimeError('DISPOSED', 'Resources disposed')
     }
     let root: string | undefined
@@ -83,10 +83,10 @@ export class ProjectResources {
       await Promise.all(skills.map(async (skill) => [skill.directory, await skillDigest(skill.directory)])),
       configs
     ])
-    if (this.disposed) {
+    if (this.#disposed) {
       throw new RuntimeError('DISPOSED', 'Resources disposed')
     }
-    let pending = this.projects.get(projectId)
+    let pending = this.#projects.get(projectId)
     if (pending) {
       const prepared = await pending
       if (prepared.fingerprint !== fingerprint) {
@@ -96,23 +96,23 @@ export class ProjectResources {
       await prepared.check()
       return prepared.snapshot
     }
-    pending = this.open(
+    pending = this.#open(
       projectId,
       !!root,
       skills.map((skill) => skill.directory),
       fingerprint
     ).catch((error: unknown) => {
-      this.projects.delete(projectId)
+      this.#projects.delete(projectId)
       throw error
     })
-    this.projects.set(projectId, pending)
+    this.#projects.set(projectId, pending)
     return (await pending).snapshot
   }
 
-  private open = async (projectId: string, knowledge: boolean, skillDirectories: string[], fingerprint: string) => {
+  #open = async (projectId: string, knowledge: boolean, skillDirectories: string[], fingerprint: string) => {
     const connection = await this.options.mcp?.connect(projectId)
     try {
-      const bridge = await this.bridge(projectId, knowledge, connection)
+      const bridge = await this.#bridge(projectId, knowledge, connection)
       return {
         check: () => connection?.check() ?? Promise.resolve(),
         close: async () => {
@@ -131,7 +131,7 @@ export class ProjectResources {
     }
   }
 
-  private bridge = async (projectId: string, knowledge: boolean, connection?: McpConnection) => {
+  #bridge = async (projectId: string, knowledge: boolean, connection?: McpConnection) => {
     const tools: Tool[] = knowledge
       ? [
           {
@@ -261,19 +261,19 @@ export class ProjectResources {
   }
 
   release = async (projectId: string): Promise<void> => {
-    const pending = this.projects.get(projectId)
+    const pending = this.#projects.get(projectId)
     if (!pending) {
       return
     }
     try {
       await (await pending).close()
     } finally {
-      this.projects.delete(projectId)
+      this.#projects.delete(projectId)
     }
   }
   dispose = async (): Promise<void> => {
-    this.disposed = true
-    await Promise.allSettled(this.preparing)
-    await Promise.all([...this.projects.keys()].map(this.release))
+    this.#disposed = true
+    await Promise.allSettled(this.#preparing)
+    await Promise.all([...this.#projects.keys()].map(this.release))
   }
 }

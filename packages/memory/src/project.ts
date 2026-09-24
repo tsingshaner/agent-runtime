@@ -56,32 +56,32 @@ const parse = <S extends z.ZodMiniType>(schema: S, input: unknown): z.output<S> 
 
 /** Fixed-pair official SDK facade; project identity never depends on runtime kind. */
 export class ProjectMemory {
-  private readonly options: z.output<typeof optionsSchema>
+  readonly #options: z.output<typeof optionsSchema>
   constructor(options: ProjectMemoryOptions) {
-    this.options = parse(optionsSchema, options)
+    this.#options = parse(optionsSchema, options)
   }
-  private client = (projectId: string, sessionId?: string): MemoryClient => {
+  #client = (projectId: string, sessionId?: string): MemoryClient => {
     parse(nonBlank, projectId)
     if (sessionId !== undefined) {
       parse(nonBlank, sessionId)
     }
-    const apiKey = process.env[this.options.apiKeyEnv]
+    const apiKey = process.env[this.#options.apiKeyEnv]
     if (!apiKey) {
       throw new MemoryError('MISSING_CREDENTIAL', 'Memory credential is unavailable')
     }
     return new MemoryClient({
       agentId: 'agent-runtime',
       apiKey,
-      endpoint: this.options.endpoint,
+      endpoint: this.#options.endpoint,
       rejectUnauthorized: true,
-      serviceId: this.options.serviceId,
+      serviceId: this.#options.serviceId,
       sessionId,
       teamId: projectId,
-      timeout: this.options.timeoutMs,
+      timeout: this.#options.timeoutMs,
       userId: 'local-user'
     })
   }
-  private request = async <T>(operation: () => Promise<T>): Promise<T> => {
+  #request = async <T>(operation: () => Promise<T>): Promise<T> => {
     try {
       return await operation()
     } catch (error) {
@@ -105,7 +105,7 @@ export class ProjectMemory {
     const source = { projectId: value.projectId, runId: value.runId, sessionId: value.sessionId }
     let client: MemoryClient
     try {
-      client = this.client(value.projectId, value.sessionId)
+      client = this.#client(value.projectId, value.sessionId)
     } catch {
       return {
         ...source,
@@ -135,34 +135,34 @@ export class ProjectMemory {
   }
   conversations = (projectId: string, page: { limit?: number; offset?: number } = {}) => {
     const input = parse(pageSchema, page)
-    return this.request(() => this.client(projectId).queryConversation(input))
+    return this.#request(() => this.#client(projectId).queryConversation(input))
   }
   deleteConversations = (projectId: string, ids: string[]) => {
     const message_ids = parse(z.array(nonBlank).check(z.minLength(1), z.maxLength(5000)), ids)
-    return this.request(() => this.client(projectId).deleteConversation({ message_ids }))
+    return this.#request(() => this.#client(projectId).deleteConversation({ message_ids }))
   }
   query = (projectId: string, page: { limit?: number; offset?: number } = {}) => {
     const input = parse(pageSchema, page)
-    return this.request(() => this.client(projectId).queryAtomic(input))
+    return this.#request(() => this.#client(projectId).queryAtomic(input))
   }
   search = (projectId: string, query: string, limit = 20) => {
     parse(nonBlank, query)
     parse(count, limit)
-    return this.request(() => this.client(projectId).searchAtomic({ limit, query }))
+    return this.#request(() => this.#client(projectId).searchAtomic({ limit, query }))
   }
   update = (projectId: string, id: string, content: string) => {
     parse(nonBlank, id)
     parse(nonBlank, content)
-    return this.request(() => this.client(projectId).updateAtomic({ content, id }))
+    return this.#request(() => this.#client(projectId).updateAtomic({ content, id }))
   }
   delete = (projectId: string, ids: string[]) => {
     parse(z.array(nonBlank).check(z.minLength(1), z.maxLength(5000)), ids)
-    return this.request(() => this.client(projectId).deleteAtomic({ ids }))
+    return this.#request(() => this.#client(projectId).deleteAtomic({ ids }))
   }
-  readCore = (projectId: string) => this.request(() => this.client(projectId).readCore())
+  readCore = (projectId: string) => this.#request(() => this.#client(projectId).readCore())
   writeCore = (projectId: string, content: string) => {
     parse(z.string(), content)
-    return this.request(() => this.client(projectId).writeCore({ content }))
+    return this.#request(() => this.#client(projectId).writeCore({ content }))
   }
   recall = (
     projectId: string,
@@ -177,8 +177,8 @@ export class ProjectMemory {
       }),
       options
     )
-    return this.request(async () => {
-      const client = this.client(projectId)
+    return this.#request(async () => {
+      const client = this.#client(projectId)
       const [atomic, core, scenarios] = await Promise.all([
         client.searchAtomic({ limit, query }),
         client.readCore(),

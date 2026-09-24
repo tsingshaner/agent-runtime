@@ -250,15 +250,16 @@ const rejectUnknownMigrations = async (client: PGlite): Promise<void> => {
  */
 export class SessionStore {
   readonly db: PgliteDatabase<typeof relations>
-  private closePromise?: Promise<void>
-  private failure: RuntimeError | null = null
-  private readonly listeners = new Map<string, Set<() => void>>()
+  #closePromise?: Promise<void>
+  #failure: RuntimeError | null = null
+  readonly #listeners = new Map<string, Set<() => void>>()
 
-  private constructor(
-    private readonly client: PGlite,
-    private readonly lock: DirectoryLock,
-    db: PgliteDatabase<typeof relations>
-  ) {
+  readonly #client: PGlite
+  readonly #lock: DirectoryLock
+
+  private constructor(client: PGlite, lock: DirectoryLock, db: PgliteDatabase<typeof relations>) {
+    this.#client = client
+    this.#lock = lock
     this.db = db
   }
 
@@ -347,8 +348,8 @@ export class SessionStore {
    * Latch the first fatal error and wake subscribers so they can observe it.
    */
   fail(error: RuntimeError): void {
-    this.failure ??= error
-    for (const listeners of this.listeners.values()) {
+    this.#failure ??= error
+    for (const listeners of this.#listeners.values()) {
       for (const listener of listeners) {
         listener()
       }
@@ -359,10 +360,10 @@ export class SessionStore {
    * Reject access after a fatal error or once closing has begun.
    */
   assertAvailable(): void {
-    if (this.failure) {
-      throw this.failure
+    if (this.#failure) {
+      throw this.#failure
     }
-    if (this.closePromise) {
+    if (this.#closePromise) {
       throw new RuntimeError('DISPOSED', 'Store is closing or disposed')
     }
   }
@@ -553,7 +554,7 @@ export class SessionStore {
       await tx.update(sessions).set({ updatedAt: sql`now()` }).where(eq(sessions.id, sessionId))
       return requireRun(tx, runId)
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
     return run
   }
 
@@ -603,7 +604,7 @@ export class SessionStore {
         })
         .where(and(eq(runs.id, runId), inArray(runs.status, activeStatuses)))
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
   }
 
   /**
@@ -621,7 +622,7 @@ export class SessionStore {
       }
       return persistEvent(tx, runId, validated)
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
     return envelope
   }
 
@@ -683,7 +684,7 @@ export class SessionStore {
       return true
     })
     if (changed) {
-      this.notifyRunChange(runId)
+      this.#notifyRunChange(runId)
     }
   }
 
@@ -729,7 +730,7 @@ export class SessionStore {
       )
       return inserted
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
     return approval
   }
 
@@ -809,7 +810,7 @@ export class SessionStore {
       )
       await refreshWaiting(tx, runId)
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
   }
 
   async requestApprovalBatch(
@@ -856,7 +857,7 @@ export class SessionStore {
       }
       await refreshWaiting(tx, runId)
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
   }
 
   async resolveApprovalBatch(
@@ -903,7 +904,7 @@ export class SessionStore {
       }
       await refreshWaiting(tx, runId)
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
   }
 
   async requestInput(runId: string, request: Pick<InputRequest, 'nativeRequestId' | 'questions'>): Promise<void> {
@@ -929,7 +930,7 @@ export class SessionStore {
         parseEvent({ name: 'runtime.input.requested', type: EventType.CUSTOM, value: publicInput })
       )
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
   }
 
   async listPendingInputs(runId: string): Promise<InputRequest[]> {
@@ -1010,7 +1011,7 @@ export class SessionStore {
       )
       await refreshWaiting(tx, runId)
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
   }
 
   /**
@@ -1078,7 +1079,7 @@ export class SessionStore {
       await tx.update(runs).set({ eventsCleared: true }).where(eq(runs.id, runId))
       await tx.delete(events).where(eq(events.runId, runId))
     })
-    this.notifyRunChange(runId)
+    this.#notifyRunChange(runId)
   }
 
   /**
@@ -1087,22 +1088,22 @@ export class SessionStore {
    * @returns A function that unregisters the listener.
    */
   onRunChange(runId: string, listener: () => void): () => void {
-    let listeners = this.listeners.get(runId)
+    let listeners = this.#listeners.get(runId)
     if (!listeners) {
       listeners = new Set()
-      this.listeners.set(runId, listeners)
+      this.#listeners.set(runId, listeners)
     }
     listeners.add(listener)
     return () => {
       listeners.delete(listener)
       if (listeners.size === 0) {
-        this.listeners.delete(runId)
+        this.#listeners.delete(runId)
       }
     }
   }
 
-  private notifyRunChange(runId: string): void {
-    for (const listener of this.listeners.get(runId) ?? []) {
+  #notifyRunChange(runId: string): void {
+    for (const listener of this.#listeners.get(runId) ?? []) {
       listener()
     }
   }
@@ -1119,13 +1120,13 @@ export class SessionStore {
    */
   close(): Promise<void> {
     this.fail(new RuntimeError('DISPOSED', 'Store is closing or disposed'))
-    this.listeners.clear()
-    this.closePromise ??= this.closeOwnedResources()
-    return this.closePromise
+    this.#listeners.clear()
+    this.#closePromise ??= this.#closeOwnedResources()
+    return this.#closePromise
   }
 
-  private async closeOwnedResources(): Promise<void> {
-    await this.client.close()
-    await this.lock.release()
+  async #closeOwnedResources(): Promise<void> {
+    await this.#client.close()
+    await this.#lock.release()
   }
 }

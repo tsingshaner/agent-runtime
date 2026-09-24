@@ -17,11 +17,14 @@ const validate = <S extends z.ZodMiniType>(schema: S, value: unknown): z.output<
 }
 /** Markdown operations on explicitly bound local directories; no runtime dependency. */
 export class Knowledge {
-  private queue: Promise<unknown> = Promise.resolve()
-  private constructor(
-    private readonly manifest: string,
-    private bindings: Record<string, string>
-  ) {}
+  #queue: Promise<unknown> = Promise.resolve()
+  readonly #manifest: string
+  #bindings: Record<string, string>
+
+  private constructor(manifest: string, bindings: Record<string, string>) {
+    this.#manifest = manifest
+    this.#bindings = bindings
+  }
 
   static async open(dataDir: string): Promise<Knowledge> {
     validate(nonempty, dataDir)
@@ -38,9 +41,9 @@ export class Knowledge {
     return new Knowledge(manifest, bindings)
   }
 
-  private load = async (): Promise<Record<string, string>> => {
+  #load = async (): Promise<Record<string, string>> => {
     try {
-      return validate(bindingSchema, JSON.parse(await read(this.manifest)))
+      return validate(bindingSchema, JSON.parse(await read(this.#manifest)))
     } catch (error) {
       if (error instanceof KnowledgeError && error.code === 'NOT_FOUND') {
         return {}
@@ -49,50 +52,50 @@ export class Knowledge {
     }
   }
 
-  private exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
-    const pending = this.queue.then(async () => {
-      const lock = `${this.manifest}.lock`
+  #exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
+    const pending = this.#queue.then(async () => {
+      const lock = `${this.#manifest}.lock`
       try {
         await mkdir(lock)
       } catch {
         throw new KnowledgeError('RESOURCE_BUSY', 'Knowledge is being updated')
       }
       try {
-        this.bindings = await this.load()
+        this.#bindings = await this.#load()
         return await operation()
       } finally {
         await rm(lock, { recursive: true })
       }
     })
-    this.queue = pending.catch(() => {})
+    this.#queue = pending.catch(() => {})
     return pending
   }
 
   bind = (projectId: string, directory: string): Promise<void> =>
-    this.exclusive(async () => {
+    this.#exclusive(async () => {
       validate(nonempty, projectId)
       validate(nonempty, directory)
       const root = await realpath(directory)
       if (!(await lstat(root)).isDirectory()) {
         throw new KnowledgeError('INVALID_PATH', 'Expected a directory')
       }
-      const next = { ...this.bindings, [projectId]: root }
-      await atomicWrite(this.manifest, JSON.stringify(next))
-      this.bindings = next
+      const next = { ...this.#bindings, [projectId]: root }
+      await atomicWrite(this.#manifest, JSON.stringify(next))
+      this.#bindings = next
     })
 
   unbind = (projectId: string): Promise<void> =>
-    this.exclusive(async () => {
+    this.#exclusive(async () => {
       validate(nonempty, projectId)
-      const next = { ...this.bindings }
+      const next = { ...this.#bindings }
       delete next[projectId]
-      await atomicWrite(this.manifest, JSON.stringify(next))
-      this.bindings = next
+      await atomicWrite(this.#manifest, JSON.stringify(next))
+      this.#bindings = next
     })
 
   binding = async (projectId: string): Promise<string> => {
     validate(nonempty, projectId)
-    const bindings = await this.load()
+    const bindings = await this.#load()
     const root = Object.hasOwn(bindings, projectId) ? bindings[projectId] : undefined
     if (!root) {
       throw new KnowledgeError('NOT_BOUND', 'Project has no knowledge binding')
@@ -103,7 +106,7 @@ export class Knowledge {
     return root
   }
 
-  private path = async (projectId: string, path: string): Promise<string> => {
+  #path = async (projectId: string, path: string): Promise<string> => {
     if (typeof path !== 'string' || !path.endsWith('.md')) {
       throw new KnowledgeError('INVALID_PATH', 'Expected a Markdown path')
     }
@@ -133,22 +136,22 @@ export class Knowledge {
     return paths.sort()
   }
 
-  read = async (projectId: string, path: string): Promise<string> => read(await this.path(projectId, path))
+  read = async (projectId: string, path: string): Promise<string> => read(await this.#path(projectId, path))
   create = (projectId: string, path: string, content: string): Promise<void> =>
-    this.exclusive(async () => {
+    this.#exclusive(async () => {
       validate(z.string(), content)
-      await atomicWrite(await this.path(projectId, path), content, true)
+      await atomicWrite(await this.#path(projectId, path), content, true)
     })
   edit = (projectId: string, path: string, content: string): Promise<void> =>
-    this.exclusive(async () => {
+    this.#exclusive(async () => {
       validate(z.string(), content)
-      const target = await this.path(projectId, path)
+      const target = await this.#path(projectId, path)
       await read(target)
       await atomicWrite(target, content)
     })
   delete = (projectId: string, path: string): Promise<void> =>
-    this.exclusive(async () => {
-      const target = await this.path(projectId, path)
+    this.#exclusive(async () => {
+      const target = await this.#path(projectId, path)
       await read(target)
       await rm(target)
     })

@@ -227,6 +227,8 @@ test('bounds shutdown waiting on memory persistence and prevents late network di
   const dir = await mkdtemp(join(tmpdir(), 'runtime-memory-'))
   const adapter = new ManualAdapter()
   let calls = 0
+  const store = await SessionStore.open(dir)
+  const opening = vi.spyOn(SessionStore, 'open').mockResolvedValueOnce(store)
   const manager = await RuntimeManager.open({
     dataDir: dir,
     memory: {
@@ -238,7 +240,7 @@ test('bounds shutdown waiting on memory persistence and prevents late network di
     },
     runtimes: [adapter]
   })
-  const store = Reflect.get(manager, 'store') as SessionStore
+  opening.mockRestore()
   const entered = Promise.withResolvers<void>()
   const gate = Promise.withResolvers<void>()
   vi.spyOn(store, 'finishMemoryWrite').mockImplementationOnce(() => {

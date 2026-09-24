@@ -112,20 +112,24 @@ const waitForExit = async (pid: number | null): Promise<void> => {
 
 /** Persistent explicit project connections; no child is started until connect/probe. */
 export class Mcp {
-  private queue: Promise<unknown> = Promise.resolve()
-  private readonly connections = new Set<McpConnection>()
-  private readonly pending = new Set<Promise<McpConnection>>()
-  private disposed = false
-  private closing?: Promise<void>
-  private constructor(private readonly directory: string) {}
+  #queue: Promise<unknown> = Promise.resolve()
+  readonly #connections = new Set<McpConnection>()
+  readonly #pending = new Set<Promise<McpConnection>>()
+  #disposed = false
+  #closing?: Promise<void>
+  readonly #directory: string
+
+  private constructor(directory: string) {
+    this.#directory = directory
+  }
   static open = async (dataDir: string): Promise<Mcp> => {
     parse(nonempty, dataDir)
     await mkdir(dataDir, { recursive: true })
     return new Mcp(await realpath(dataDir))
   }
-  private load = async (): Promise<State> => {
+  #load = async (): Promise<State> => {
     try {
-      return parse(stateSchema, JSON.parse(await readRegularFile(join(this.directory, 'mcp.json'))))
+      return parse(stateSchema, JSON.parse(await readRegularFile(join(this.#directory, 'mcp.json'))))
     } catch (error) {
       if (error instanceof FileError && error.code === 'NOT_FOUND') {
         return { bindings: {}, configs: {} }
@@ -133,48 +137,48 @@ export class Mcp {
       throw error
     }
   }
-  private assertOpen = () => {
-    if (this.disposed) {
+  #assertOpen = () => {
+    if (this.#disposed) {
       throw new FileError('DISPOSED', 'MCP manager disposed')
     }
   }
-  private mutate = <T>(operation: (state: State) => T | Promise<T>): Promise<T> => {
-    this.assertOpen()
-    const pending = this.queue.then(async () => {
-      this.assertOpen()
-      const lock = join(this.directory, 'mcp.lock')
+  #mutate = <T>(operation: (state: State) => T | Promise<T>): Promise<T> => {
+    this.#assertOpen()
+    const pending = this.#queue.then(async () => {
+      this.#assertOpen()
+      const lock = join(this.#directory, 'mcp.lock')
       try {
         await mkdir(lock)
       } catch {
         throw new FileError('RESOURCE_BUSY', 'MCP config is being updated')
       }
       try {
-        const state = await this.load()
+        const state = await this.#load()
         const result = await operation(state)
-        await atomicWrite(join(this.directory, 'mcp.json'), JSON.stringify(state))
+        await atomicWrite(join(this.#directory, 'mcp.json'), JSON.stringify(state))
         return result
       } finally {
         await rm(lock, { recursive: true })
       }
     })
-    this.queue = pending.catch(() => {})
+    this.#queue = pending.catch(() => {})
     return pending
   }
   create = (input: McpConfig): Promise<McpServer> =>
-    this.mutate((state) => {
+    this.#mutate((state) => {
       const config = parse(configSchema, input)
       const id = randomUUID()
       state.configs[id] = config
       return { id, ...config }
     })
   update = (id: string, input: McpConfig): Promise<McpServer> =>
-    this.mutate((state) => {
-      this.lookup(state, id)
+    this.#mutate((state) => {
+      this.#lookup(state, id)
       const config = parse(configSchema, input)
       state.configs[id] = config
       return { id, ...config }
     })
-  private lookup = (state: State, id: string): McpServer => {
+  #lookup = (state: State, id: string): McpServer => {
     parse(nonempty, id)
     const config = Object.hasOwn(state.configs, id) ? state.configs[id] : undefined
     if (!config) {
@@ -182,34 +186,34 @@ export class Mcp {
     }
     return { id, ...config }
   }
-  get = async (id: string): Promise<McpServer> => this.lookup(await this.load(), id)
+  get = async (id: string): Promise<McpServer> => this.#lookup(await this.#load(), id)
   list = async (projectId?: string): Promise<(McpServer & { enabled?: boolean })[]> => {
-    const state = await this.load()
+    const state = await this.#load()
     if (projectId === undefined) {
       return Object.entries(state.configs).map(([id, config]) => ({ id, ...config }))
     }
     parse(nonempty, projectId)
     const bindings = Object.hasOwn(state.bindings, projectId) ? state.bindings[projectId] : undefined
-    return Object.entries(bindings ?? {}).map(([id, enabled]) => ({ ...this.lookup(state, id), enabled }))
+    return Object.entries(bindings ?? {}).map(([id, enabled]) => ({ ...this.#lookup(state, id), enabled }))
   }
   delete = (id: string): Promise<void> =>
-    this.mutate((state) => {
-      this.lookup(state, id)
+    this.#mutate((state) => {
+      this.#lookup(state, id)
       delete state.configs[id]
       for (const bindings of Object.values(state.bindings)) {
         delete bindings[id]
       }
     })
   bind = (projectId: string, id: string, enabled: boolean): Promise<void> =>
-    this.mutate((state) => {
+    this.#mutate((state) => {
       parse(nonempty, projectId)
       parse(z.boolean(), enabled)
-      this.lookup(state, id)
+      this.#lookup(state, id)
       const bindings = Object.hasOwn(state.bindings, projectId) ? state.bindings[projectId] : {}
       state.bindings = { ...state.bindings, [projectId]: { ...bindings, [id]: enabled } }
     })
   unbind = (projectId: string, id: string): Promise<void> =>
-    this.mutate((state) => {
+    this.#mutate((state) => {
       parse(nonempty, projectId)
       parse(nonempty, id)
       if (Object.hasOwn(state.bindings, projectId)) {
@@ -218,33 +222,33 @@ export class Mcp {
     })
   enabled = async (projectId: string): Promise<McpServer[]> => {
     parse(nonempty, projectId)
-    const state = await this.load()
+    const state = await this.#load()
     const bindings = Object.hasOwn(state.bindings, projectId) ? state.bindings[projectId] : undefined
     return Object.entries(bindings ?? {})
       .filter(([, enabled]) => enabled)
-      .map(([id]) => this.lookup(state, id))
+      .map(([id]) => this.#lookup(state, id))
   }
   connect = (projectId: string): Promise<McpConnection> =>
-    this.track(async () => this.prepare(await this.enabled(projectId)))
+    this.#track(async () => this.#prepare(await this.enabled(projectId)))
   probe = async (id: string): Promise<Tool[]> => {
-    const connection = await this.track(async () => this.prepare([await this.get(id)]))
+    const connection = await this.#track(async () => this.#prepare([await this.get(id)]))
     try {
       return connection.tools
     } finally {
       await connection.close()
     }
   }
-  private track = (operation: () => Promise<McpConnection>): Promise<McpConnection> => {
-    this.assertOpen()
+  #track = (operation: () => Promise<McpConnection>): Promise<McpConnection> => {
+    this.#assertOpen()
     const pending = Promise.resolve()
       .then(operation)
-      .finally(() => this.pending.delete(pending))
-    this.pending.add(pending)
+      .finally(() => this.#pending.delete(pending))
+    this.#pending.add(pending)
     return pending
   }
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Keep connection acquisition and all failure cleanup in one scope.
-  private prepare = async (configs: McpServer[]): Promise<McpConnection> => {
-    this.assertOpen()
+  #prepare = async (configs: McpServer[]): Promise<McpConnection> => {
+    this.#assertOpen()
     const cleanup: (() => Promise<void>)[] = []
     const secrets: string[] = []
     const owners = new Map<string, { client: Client; timeoutMs: number }>()
@@ -305,11 +309,11 @@ export class Mcp {
           if (results.some((result) => result.status === 'rejected')) {
             throw new FileError('MCP_CLOSE_FAILED', 'MCP cleanup failed')
           }
-          this.connections.delete(connection)
+          this.#connections.delete(connection)
         })()),
       tools
     }
-    this.connections.add(connection)
+    this.#connections.add(connection)
     try {
       for (const config of configs) {
         const env: Record<string, string> = config.transport === 'stdio' ? getDefaultEnvironment() : {}
@@ -383,7 +387,7 @@ export class Mcp {
           tools.push(redact(tool, secrets))
         }
       }
-      if (this.disposed) {
+      if (this.#disposed) {
         throw new FileError('DISPOSED', 'MCP manager disposed')
       }
       return connection
@@ -402,11 +406,11 @@ export class Mcp {
     }
   }
   dispose = (): Promise<void> =>
-    (this.closing ??= (async () => {
-      this.disposed = true
-      await this.queue
-      await Promise.allSettled(this.pending)
-      const results = await Promise.allSettled([...this.connections].map((connection) => connection.close()))
+    (this.#closing ??= (async () => {
+      this.#disposed = true
+      await this.#queue
+      await Promise.allSettled(this.#pending)
+      const results = await Promise.allSettled([...this.#connections].map((connection) => connection.close()))
       if (results.some((result) => result.status === 'rejected')) {
         throw new FileError('MCP_CLOSE_FAILED', 'MCP cleanup failed')
       }

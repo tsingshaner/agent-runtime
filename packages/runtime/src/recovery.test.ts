@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { EventType } from '@ag-ui/core'
+import { PGlite } from '@electric-sql/pglite'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { ManualAdapter } from '../test/manual-adapter'
@@ -40,6 +41,8 @@ describe('recovery and shutdown', () => {
     await rm(dir, { force: true, recursive: true })
   })
   const open = async (adapter = new ManualAdapter()) => {
+    const store = await SessionStore.open(dir)
+    vi.spyOn(SessionStore, 'open').mockResolvedValueOnce(store)
     manager = await RuntimeManager.open({ dataDir: dir, runtimes: [adapter] })
     await manager.createProject({ id: 'project', name: 'project' })
     const session = await manager.createSession({
@@ -48,7 +51,7 @@ describe('recovery and shutdown', () => {
       projectId: 'project',
       runtime: adapter.kind
     })
-    return { adapter, manager, session }
+    return { adapter, manager, session, store }
   }
 
   test('records one interrupted terminal on reopen and expires outstanding approvals', async () => {
@@ -96,7 +99,7 @@ describe('recovery and shutdown', () => {
   })
 
   test('fails every subscription and admission on a rolled back event write without fabricating a terminal', async () => {
-    const { adapter, manager, session } = await open()
+    const { adapter, manager, session, store } = await open()
     const { runId } = await manager.run(session.id, { text: 'hello' })
     await adapter.waitStarted(runId)
     const subscriptions = [
@@ -110,7 +113,6 @@ describe('recovery and shutdown', () => {
         (error: unknown) => error
       )
     )
-    const store = Reflect.get(manager, 'store') as SessionStore
     const failure = new Error('disk write failed')
     const original = store.db.transaction.bind(store.db)
     vi.spyOn(store.db, 'transaction').mockImplementationOnce((callback) =>
@@ -227,8 +229,7 @@ describe('recovery and shutdown', () => {
     }
   })
   test('retains ownership if an accepted database write cannot drain', async () => {
-    const { manager, session } = await open()
-    const store = Reflect.get(manager, 'store') as SessionStore
+    const { manager, session, store } = await open()
     const entered = gate()
     const release = gate()
     const original = store.db.transaction.bind(store.db)
@@ -273,16 +274,14 @@ describe('recovery and shutdown', () => {
     }
   })
   test('retains ownership until a delayed database close is confirmed', async () => {
-    const { manager } = await open()
-    const store = Reflect.get(manager, 'store') as SessionStore
-    const client = Reflect.get(store, 'client') as { close(): Promise<void> }
+    const { manager, store } = await open()
     const entered = gate()
     const release = gate()
-    const original = client.close.bind(client)
-    vi.spyOn(client, 'close').mockImplementationOnce(async () => {
+    const original = PGlite.prototype.close
+    vi.spyOn(PGlite.prototype, 'close').mockImplementationOnce(async function (this: PGlite) {
       entered.resolve()
       await release.promise
-      await original()
+      await original.call(this)
     })
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const closing = manager.dispose().catch((error: unknown) => error)

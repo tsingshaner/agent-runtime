@@ -38,51 +38,51 @@ export class MemoryCoreError extends Error {
 
 /** Owns only processes started by this instance; construction has no side effects. */
 export class MemoryCoreService {
-  private readonly options: MemoryCoreOptions
-  private readonly endpoint: string
-  private child?: ChildProcess
-  private exited?: Promise<void>
-  private release?: () => Promise<void>
-  private phase: MemoryCoreStatus['phase'] = 'stopped'
-  private queue: Promise<unknown> = Promise.resolve()
-  private disposed = false
-  private failure?: MemoryCoreStatus['error']
+  readonly #options: MemoryCoreOptions
+  readonly #endpoint: string
+  #child?: ChildProcess
+  #exited?: Promise<void>
+  #release?: () => Promise<void>
+  #phase: MemoryCoreStatus['phase'] = 'stopped'
+  #queue: Promise<unknown> = Promise.resolve()
+  #disposed = false
+  #failure?: MemoryCoreStatus['error']
 
   constructor(options: MemoryCoreOptions) {
     if (!isAbsolute(options.directory)) {
       throw new MemoryCoreError('INVALID_CONFIG', 'directory must be absolute')
     }
     validateOptions(options)
-    this.options = structuredClone(options)
-    this.endpoint = new URL(options.endpoint ?? 'http://127.0.0.1:8420').origin
+    this.#options = structuredClone(options)
+    this.#endpoint = new URL(options.endpoint ?? 'http://127.0.0.1:8420').origin
   }
 
   async status(): Promise<MemoryCoreStatus> {
-    const installed = !this.failure && (await this.installed())
-    const owned = !!this.child && this.child.exitCode === null && this.child.signalCode === null
+    const installed = !this.#failure && (await this.#installed())
+    const owned = !!this.#child && this.#child.exitCode === null && this.#child.signalCode === null
     return {
-      endpoint: this.endpoint,
+      endpoint: this.#endpoint,
       owned,
-      phase: this.failure ? 'failed' : owned ? this.phase : installed ? 'stopped' : 'not_installed',
+      phase: this.#failure ? 'failed' : owned ? this.#phase : installed ? 'stopped' : 'not_installed',
       version: MEMORY_CORE_VERSION,
-      ...(this.failure ? { error: { ...this.failure } } : {})
+      ...(this.#failure ? { error: { ...this.#failure } } : {})
     }
   }
 
   /** Install the verified fixed source into a version directory; never touches data. */
   install(options: { archivePath?: string } = {}): Promise<MemoryCoreStatus> {
-    return this.exclusive(async () => {
-      if (await this.installed()) {
+    return this.#exclusive(async () => {
+      if (await this.#installed()) {
         return this.status()
       }
-      const release = await this.acquire()
+      const release = await this.#acquire()
       let staging: string | undefined
       try {
-        const target = join(this.options.directory, 'versions', MEMORY_CORE_COMMIT)
+        const target = join(this.#options.directory, 'versions', MEMORY_CORE_COMMIT)
         if (await exists(join(target, 'installed.json'))) {
           return this.status()
         }
-        staging = await mkdtemp(join(this.options.directory, '.install-'))
+        staging = await mkdtemp(join(this.#options.directory, '.install-'))
         const archive = options.archivePath ? await readFile(options.archivePath) : await downloadArchive()
         if (createHash('sha256').update(archive).digest('hex') !== ARCHIVE_SHA256) {
           throw new MemoryCoreError('ARCHIVE_INTEGRITY', 'Archive does not match the pinned MemoryCore SHA-256')
@@ -112,9 +112,9 @@ export class MemoryCoreService {
           JSON.stringify({ commit: MEMORY_CORE_COMMIT, version: MEMORY_CORE_VERSION }),
           { mode: 0o600 }
         )
-        await mkdir(join(this.options.directory, 'versions'), { recursive: true })
+        await mkdir(join(this.#options.directory, 'versions'), { recursive: true })
         await rename(core, target)
-        this.failure = undefined
+        this.#failure = undefined
         return this.status()
       } finally {
         try {
@@ -130,26 +130,26 @@ export class MemoryCoreService {
 
   /** Start only an installed Core; readiness requires this child's listen signal and health. */
   start(): Promise<MemoryCoreStatus> {
-    return this.exclusive(async () => {
-      if (this.child && this.child.exitCode === null && this.child.signalCode === null) {
+    return this.#exclusive(async () => {
+      if (this.#child && this.#child.exitCode === null && this.#child.signalCode === null) {
         return this.status()
       }
-      await this.shutdown()
-      if (!(await this.installed())) {
+      await this.#shutdown()
+      if (!(await this.#installed())) {
         throw new MemoryCoreError('NOT_INSTALLED', 'Install the fixed MemoryCore before starting')
       }
-      const modelKey = credential(this.options.model.apiKeyEnv)
-      const apiKey = credential(this.options.gatewayApiKeyEnv)
-      this.release = await this.acquire()
-      this.failure = undefined
-      this.phase = 'starting'
+      const modelKey = credential(this.#options.model.apiKeyEnv)
+      const apiKey = credential(this.#options.gatewayApiKeyEnv)
+      this.#release = await this.#acquire()
+      this.#failure = undefined
+      this.#phase = 'starting'
       try {
-        const endpoint = new URL(this.endpoint)
+        const endpoint = new URL(this.#endpoint)
         const config = {
-          data: { baseDir: join(this.options.directory, 'data') },
+          data: { baseDir: join(this.#options.directory, 'data') },
           deployMode: 'standalone',
-          instanceId: this.options.serviceId,
-          llm: { apiKey: modelKey, baseUrl: this.options.model.baseUrl, model: this.options.model.name },
+          instanceId: this.#options.serviceId,
+          llm: { apiKey: modelKey, baseUrl: this.#options.model.baseUrl, model: this.#options.model.name },
           memory: {
             bm25: { enabled: true },
             embedding: { provider: 'none' },
@@ -161,19 +161,19 @@ export class MemoryCoreService {
           stateBackend: 'local'
         }
         await mkdir(config.data.baseDir, { mode: 0o700, recursive: true })
-        const configPath = join(this.options.directory, '.memorycore.lock', 'gateway.json')
+        const configPath = join(this.#options.directory, '.memorycore.lock', 'gateway.json')
         await writeFile(configPath, JSON.stringify(config), { flag: 'wx', mode: 0o600 })
         const child = spawn(process.execPath, ['--import', 'tsx', 'src/gateway/server.ts'], {
-          cwd: join(this.options.directory, 'versions', MEMORY_CORE_COMMIT),
+          cwd: join(this.#options.directory, 'versions', MEMORY_CORE_COMMIT),
           env: {
-            HOME: this.options.directory,
+            HOME: this.#options.directory,
             PATH: process.env.PATH,
             TDAI_GATEWAY_CONFIG: configPath,
             TDAI_OTEL_ENABLED: 'false'
           },
           stdio: ['ignore', 'pipe', 'pipe']
         })
-        this.child = child
+        this.#child = child
         let listening = false
         let tail = ''
         child.stdout?.on('data', (chunk: Buffer) => {
@@ -182,20 +182,20 @@ export class MemoryCoreService {
         })
         child.stderr?.resume()
         child.on('error', () => {})
-        this.exited = new Promise<void>((resolve) => {
+        this.#exited = new Promise<void>((resolve) => {
           child.once('close', (code, signal) => {
-            if (this.phase !== 'stopped') {
-              this.failure = { code: 'PROCESS_EXITED', message: `MemoryCore exited (code ${code}, signal ${signal})` }
-              this.phase = 'failed'
+            if (this.#phase !== 'stopped') {
+              this.#failure = { code: 'PROCESS_EXITED', message: `MemoryCore exited (code ${code}, signal ${signal})` }
+              this.#phase = 'failed'
             }
             resolve()
           })
         })
-        await this.waitForHealth(child, () => listening)
-        this.phase = 'running'
+        await this.#waitForHealth(child, () => listening)
+        this.#phase = 'running'
         return this.status()
       } catch (error) {
-        await this.shutdown()
+        await this.#shutdown()
         throw error
       }
     })
@@ -203,25 +203,25 @@ export class MemoryCoreService {
 
   /** Stop only the retained child handle; never adopts or kills a PID from disk. */
   stop(): Promise<void> {
-    const next = this.queue.then(() => this.shutdown())
-    this.queue = next.catch(() => {})
+    const next = this.#queue.then(() => this.#shutdown())
+    this.#queue = next.catch(() => {})
     return next
   }
 
   /** Reject new work and wait for bounded owned-process shutdown. Safe to repeat. */
   async dispose(): Promise<void> {
-    this.disposed = true
+    this.#disposed = true
     await this.stop()
   }
 
-  private async waitForHealth(child: ChildProcess, listening: () => boolean): Promise<void> {
-    const deadline = Date.now() + (this.options.startupTimeoutMs ?? 30_000)
+  async #waitForHealth(child: ChildProcess, listening: () => boolean): Promise<void> {
+    const deadline = Date.now() + (this.#options.startupTimeoutMs ?? 30_000)
     while (Date.now() < deadline) {
-      if (this.failure) {
-        throw new MemoryCoreError(this.failure.code, this.failure.message)
+      if (this.#failure) {
+        throw new MemoryCoreError(this.#failure.code, this.#failure.message)
       }
       if (listening()) {
-        const response = await fetch(`${this.endpoint}/health`, {
+        const response = await fetch(`${this.#endpoint}/health`, {
           signal: AbortSignal.timeout(Math.max(1, Math.min(500, deadline - Date.now())))
         }).catch(() => undefined)
         await response?.body?.cancel()
@@ -234,30 +234,30 @@ export class MemoryCoreService {
     throw new MemoryCoreError('HEALTH_TIMEOUT', 'Owned MemoryCore did not become healthy before the startup deadline')
   }
 
-  private async shutdown(): Promise<void> {
-    this.phase = 'stopped'
-    const child = this.child
+  async #shutdown(): Promise<void> {
+    this.#phase = 'stopped'
+    const child = this.#child
     if (child) {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill('SIGTERM')
-        const timer = setTimeout(() => child.kill('SIGKILL'), this.options.shutdownTimeoutMs ?? 5000)
+        const timer = setTimeout(() => child.kill('SIGKILL'), this.#options.shutdownTimeoutMs ?? 5000)
         try {
-          await this.exited
+          await this.#exited
         } finally {
           clearTimeout(timer)
         }
       } else {
-        await this.exited
+        await this.#exited
       }
-      this.child = undefined
-      this.exited = undefined
+      this.#child = undefined
+      this.#exited = undefined
     }
-    await this.release?.()
-    this.release = undefined
+    await this.#release?.()
+    this.#release = undefined
   }
 
-  private async installed(): Promise<boolean> {
-    const core = join(this.options.directory, 'versions', MEMORY_CORE_COMMIT)
+  async #installed(): Promise<boolean> {
+    const core = join(this.#options.directory, 'versions', MEMORY_CORE_COMMIT)
     if (!(await exists(join(core, 'installed.json')))) {
       return false
     }
@@ -275,9 +275,9 @@ export class MemoryCoreService {
     return true
   }
 
-  private exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(async () => {
-      if (this.disposed) {
+  #exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.#queue.then(async () => {
+      if (this.#disposed) {
         throw new MemoryCoreError('DISPOSED', 'MemoryCore service is disposed')
       }
       try {
@@ -287,17 +287,17 @@ export class MemoryCoreService {
           error instanceof MemoryCoreError
             ? error
             : new MemoryCoreError('IO_ERROR', 'MemoryCore filesystem or process operation failed')
-        this.failure = { code: safe.code, message: safe.message }
+        this.#failure = { code: safe.code, message: safe.message }
         throw safe
       }
     })
-    this.queue = next.catch(() => {})
+    this.#queue = next.catch(() => {})
     return next
   }
 
-  private async acquire(): Promise<() => Promise<void>> {
-    await mkdir(this.options.directory, { mode: 0o700, recursive: true })
-    const lock = join(await realpath(this.options.directory), '.memorycore.lock')
+  async #acquire(): Promise<() => Promise<void>> {
+    await mkdir(this.#options.directory, { mode: 0o700, recursive: true })
+    const lock = join(await realpath(this.#options.directory), '.memorycore.lock')
     try {
       await mkdir(lock, { mode: 0o700 })
     } catch {

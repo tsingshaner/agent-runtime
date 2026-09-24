@@ -17,14 +17,17 @@ const event = (value: unknown): AdapterNotice => {
  */
 export class CodexEventMapper {
   finalReply?: string
-  private readonly texts = new Map<string, { text: string; ended: boolean }>()
-  private readonly tools = new Set<string>()
-  private readonly completed = new Set<string>()
+  readonly #texts = new Map<string, { text: string; ended: boolean }>()
+  readonly #tools = new Set<string>()
+  readonly #completed = new Set<string>()
 
-  constructor(
-    private readonly sessionId: string,
-    private readonly runId: string
-  ) {}
+  readonly #sessionId: string
+  readonly #runId: string
+
+  constructor(sessionId: string, runId: string) {
+    this.#sessionId = sessionId
+    this.#runId = runId
+  }
 
   /**
    * Validate and project supported notifications, suppressing repeated completed items.
@@ -33,10 +36,10 @@ export class CodexEventMapper {
     if (method === 'item/agentMessage/delta') {
       const { itemId, delta } = parseProtocol(DeltaSchema, params)
       const output: AdapterNotice[] = []
-      const state = this.text(itemId, output)
+      const state = this.#text(itemId, output)
       if (!state.ended && delta) {
         state.text += delta
-        output.push(event({ delta, messageId: this.id(itemId), type: 'TEXT_MESSAGE_CONTENT' }))
+        output.push(event({ delta, messageId: this.#id(itemId), type: 'TEXT_MESSAGE_CONTENT' }))
       }
       return output
     }
@@ -46,7 +49,7 @@ export class CodexEventMapper {
         event({
           name: 'codex.progress',
           type: 'CUSTOM',
-          value: { delta, itemId, method, runId: this.runId, sessionId: this.sessionId }
+          value: { delta, itemId, method, runId: this.#runId, sessionId: this.#sessionId }
         })
       ]
     }
@@ -54,13 +57,13 @@ export class CodexEventMapper {
       return []
     }
     const { item } = parseProtocol(ItemNotificationSchema, params)
-    if (this.completed.has(item.id)) {
+    if (this.#completed.has(item.id)) {
       return []
     }
     const complete = method === 'item/completed'
-    const output = this.item(item, complete)
+    const output = this.#item(item, complete)
     if (complete) {
-      this.completed.add(item.id)
+      this.#completed.add(item.id)
     }
     return output
   }
@@ -70,28 +73,28 @@ export class CodexEventMapper {
    */
   finish(_outcome: AdapterOutcome): AdapterNotice[] {
     const output: AdapterNotice[] = []
-    for (const [itemId, state] of this.texts) {
+    for (const [itemId, state] of this.#texts) {
       if (!state.ended) {
         state.ended = true
-        output.push(event({ messageId: this.id(itemId), type: 'TEXT_MESSAGE_END' }))
+        output.push(event({ messageId: this.#id(itemId), type: 'TEXT_MESSAGE_END' }))
       }
     }
     return output
   }
 
-  private item(item: Item, complete: boolean): AdapterNotice[] {
+  #item(item: Item, complete: boolean): AdapterNotice[] {
     switch (item.type) {
       case 'agentMessage':
-        return this.message(item, complete)
+        return this.#message(item, complete)
       case 'mcpToolCall':
-        return this.tool(item, complete)
+        return this.#tool(item, complete)
       case 'commandExecution':
       case 'fileChange':
         return [
           event({
             name: item.type === 'commandExecution' ? 'codex.command' : 'codex.file-change',
             type: 'CUSTOM',
-            value: { item, runId: this.runId, sessionId: this.sessionId, stage: complete ? 'completed' : 'started' }
+            value: { item, runId: this.#runId, sessionId: this.#sessionId, stage: complete ? 'completed' : 'started' }
           })
         ]
       default:
@@ -99,9 +102,9 @@ export class CodexEventMapper {
     }
   }
 
-  private message(item: Extract<Item, { type: 'agentMessage' }>, complete: boolean): AdapterNotice[] {
+  #message(item: Extract<Item, { type: 'agentMessage' }>, complete: boolean): AdapterNotice[] {
     const output: AdapterNotice[] = []
-    const state = this.text(item.id, output)
+    const state = this.#text(item.id, output)
     if (!complete) {
       return output
     }
@@ -110,22 +113,22 @@ export class CodexEventMapper {
     }
     const delta = item.text.slice(state.text.length)
     if (delta) {
-      output.push(event({ delta, messageId: this.id(item.id), type: 'TEXT_MESSAGE_CONTENT' }))
+      output.push(event({ delta, messageId: this.#id(item.id), type: 'TEXT_MESSAGE_CONTENT' }))
     }
     if (item.phase === 'final_answer') {
       this.finalReply = item.text
     }
     state.text = item.text
     state.ended = true
-    output.push(event({ messageId: this.id(item.id), type: 'TEXT_MESSAGE_END' }))
+    output.push(event({ messageId: this.#id(item.id), type: 'TEXT_MESSAGE_END' }))
     return output
   }
 
-  private tool(item: Extract<Item, { type: 'mcpToolCall' }>, complete: boolean): AdapterNotice[] {
+  #tool(item: Extract<Item, { type: 'mcpToolCall' }>, complete: boolean): AdapterNotice[] {
     const output: AdapterNotice[] = []
-    const itemId = this.id(item.id)
-    if (!this.tools.has(item.id)) {
-      this.tools.add(item.id)
+    const itemId = this.#id(item.id)
+    if (!this.#tools.has(item.id)) {
+      this.#tools.add(item.id)
       output.push(
         event({ toolCallId: itemId, toolCallName: `${item.server}.${item.tool}`, type: 'TOOL_CALL_START' }),
         event({ delta: JSON.stringify(item.arguments), toolCallId: itemId, type: 'TOOL_CALL_ARGS' }),
@@ -146,16 +149,16 @@ export class CodexEventMapper {
     return output
   }
 
-  private id(itemId: string): string {
-    return `${this.runId}:${itemId}`
+  #id(itemId: string): string {
+    return `${this.#runId}:${itemId}`
   }
 
-  private text(itemId: string, output: AdapterNotice[]) {
-    let state = this.texts.get(itemId)
+  #text(itemId: string, output: AdapterNotice[]) {
+    let state = this.#texts.get(itemId)
     if (!state) {
       state = { ended: false, text: '' }
-      this.texts.set(itemId, state)
-      output.push(event({ messageId: this.id(itemId), role: 'assistant', type: 'TEXT_MESSAGE_START' }))
+      this.#texts.set(itemId, state)
+      output.push(event({ messageId: this.#id(itemId), role: 'assistant', type: 'TEXT_MESSAGE_START' }))
     }
     return state
   }

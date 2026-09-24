@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { RuntimeManager } from '@qingshaner/runtime'
 import { expect, test, vi } from 'vitest'
 
+import { JsonRpcClient } from '../src/client'
 import { CodexRuntime } from '../src/runtime'
 
 test('shares processes within a project, isolates failures and resumes from owned homes', async () => {
@@ -107,15 +108,14 @@ test.skipIf(process.env.RUN_CODEX_PROJECT_SMOKE !== '1')(
     const config = '[mcp_servers.unbound]\ncommand="never-run"\n'
     await writeFile(join(auth, 'config.toml'), config)
     const options = { codexHome: auth, dataDir: join(dir, 'owned'), requestTimeoutMs: 30000 }
+    const requests = vi.spyOn(JsonRpcClient.prototype, 'request')
     let runtime = new CodexRuntime(options)
     try {
       const session = await runtime.createSession({ cwd, model: 'gpt-6-astra', projectId: 'project' })
-      const processes = Reflect.get(runtime, 'projects') as Map<string, Promise<object>>
-      const owner = await processes.get('project')
-      if (!owner) {
-        throw new Error('Missing process')
+      const client = requests.mock.contexts.at(-1) as JsonRpcClient | undefined
+      if (!client) {
+        throw new Error('Missing transport')
       }
-      const client = Reflect.get(owner, 'client') as { request(method: string, params: unknown): Promise<unknown> }
       const skills = (await client.request('skills/list', { cwds: [cwd], forceReload: true })) as {
         data: { skills: { enabled: boolean }[] }[]
       }
@@ -141,13 +141,14 @@ test.skipIf(process.env.RUN_CODEX_PROJECT_SMOKE !== '1')(
       await runtime.dispose()
       runtime = new CodexRuntime(options)
       await runtime.resumeSession(session)
-      const home = Reflect.get(owner, 'options').codexHome as string
+      const home = join(options.dataDir, createHash('sha256').update('project').digest('hex'), 'codex')
       await runtime.dispose()
       await cp(join(home, 'sessions'), join(auth, 'sessions'), { recursive: true })
       runtime = new CodexRuntime({ ...options, dataDir: join(dir, 'migrated') })
       await runtime.resumeSession(session)
       expect(await readFile(join(auth, 'config.toml'), 'utf8')).toBe(config)
     } finally {
+      requests.mockRestore()
       await runtime.dispose()
       await rm(dir, { force: true, recursive: true })
     }

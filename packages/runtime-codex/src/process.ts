@@ -129,26 +129,28 @@ const failed = (error: RuntimeError): AdapterOutcome => {
  */
 export class CodexProcess implements RuntimeAdapter {
   readonly kind = 'codex'
-  private readonly options: z.output<typeof OptionsSchema>
-  private client?: JsonRpcClient
-  private starting?: Promise<JsonRpcClient>
-  private disposed = false
-  private closing?: Promise<void>
-  private readonly prepared = new Map<string, Promise<JsonObject>>()
-  private readonly loaded = new Map<string, Promise<void>>()
-  private readonly runs = new Map<string, ActiveRun>()
-  private readonly threads = new Map<string, ActiveRun>()
+  readonly #options: z.output<typeof OptionsSchema>
+  #client?: JsonRpcClient
+  #starting?: Promise<JsonRpcClient>
+  #disposed = false
+  #closing?: Promise<void>
+  readonly #prepared = new Map<string, Promise<JsonObject>>()
+  readonly #loaded = new Map<string, Promise<void>>()
+  readonly #runs = new Map<string, ActiveRun>()
+  readonly #threads = new Map<string, ActiveRun>()
+
+  readonly #userHome: string
+  readonly #legacyHome: string
+  #resources: ResourceSnapshot | undefined
 
   /**
    * Validate process settings without starting the native process.
    */
-  constructor(
-    options: CodexRuntimeOptions,
-    private readonly userHome: string,
-    private readonly legacyHome: string,
-    private resources?: ResourceSnapshot
-  ) {
-    this.options = validate(OptionsSchema, options)
+  constructor(options: CodexRuntimeOptions, userHome: string, legacyHome: string, resources?: ResourceSnapshot) {
+    this.#userHome = userHome
+    this.#legacyHome = legacyHome
+    this.#resources = resources
+    this.#options = validate(OptionsSchema, options)
   }
 
   /**
@@ -160,15 +162,15 @@ export class CodexProcess implements RuntimeAdapter {
     projectId?: string
     options?: CodexSessionOptions
   }): Promise<NativeSession> {
-    this.checkOpen()
-    const options = this.sessionOptions(input.options ?? {}, input.model)
-    const cwd = await this.directory(input.cwd)
-    const client = await this.start()
-    const config = await this.prepareResources(client, cwd)
+    this.#checkOpen()
+    const options = this.#sessionOptions(input.options ?? {}, input.model)
+    const cwd = await this.#directory(input.cwd)
+    const client = await this.#start()
+    const config = await this.#prepareResources(client, cwd)
     const params = { config, cwd, ...options, approvalsReviewer: 'user', ephemeral: false } satisfies ThreadStartParams
     const result = parseProtocol(ThreadResponseSchema, await client.request('thread/start', params))
-    this.checkClient(client)
-    this.loaded.set(result.thread.id, Promise.resolve())
+    this.#checkClient(client)
+    this.#loaded.set(result.thread.id, Promise.resolve())
     if (input.model === undefined) {
       return { cwd, nativeSessionId: result.thread.id, options }
     }
@@ -180,18 +182,18 @@ export class CodexProcess implements RuntimeAdapter {
    * Load a native thread once per process generation, sharing concurrent resume requests.
    */
   async resumeSession(session: NativeSession): Promise<void> {
-    this.checkOpen()
+    this.#checkOpen()
     const nativeSessionId = validate(nonempty, session.nativeSessionId)
-    const options = this.sessionOptions(session.options, session.model)
-    const cwd = await this.directory(session.cwd)
-    const client = await this.start()
-    const config = await this.prepareResources(client, cwd)
-    const existing = this.loaded.get(nativeSessionId)
+    const options = this.#sessionOptions(session.options, session.model)
+    const cwd = await this.#directory(session.cwd)
+    const client = await this.#start()
+    const config = await this.#prepareResources(client, cwd)
+    const existing = this.#loaded.get(nativeSessionId)
     if (existing) {
       return existing
     }
     const resume = (async () => {
-      await this.importLegacyHistory(nativeSessionId)
+      await this.#importLegacyHistory(nativeSessionId)
       const params = {
         config,
         cwd,
@@ -200,17 +202,17 @@ export class CodexProcess implements RuntimeAdapter {
         approvalsReviewer: 'user'
       } satisfies ThreadResumeParams
       const result = parseProtocol(ThreadResponseSchema, await client.request('thread/resume', params))
-      this.checkClient(client)
+      this.#checkClient(client)
       if (result.thread.id !== nativeSessionId) {
         throw new RuntimeError('PROTOCOL_ERROR', 'Resumed thread identity does not match')
       }
     })()
-    this.loaded.set(nativeSessionId, resume)
+    this.#loaded.set(nativeSessionId, resume)
     try {
       await resume
     } catch (error) {
-      if (this.loaded.get(nativeSessionId) === resume) {
-        this.loaded.delete(nativeSessionId)
+      if (this.#loaded.get(nativeSessionId) === resume) {
+        this.#loaded.delete(nativeSessionId)
       }
       throw error
     }
@@ -229,13 +231,13 @@ export class CodexProcess implements RuntimeAdapter {
     input: { sessionId: string; runId: string; text: string; context?: string },
     emit: (notice: AdapterNotice) => Promise<void>
   ): Promise<AdapterOutcome> {
-    this.checkOpen()
+    this.#checkOpen()
     validate(
       z.strictObject({ context: z.optional(z.string()), runId: nonempty, sessionId: nonempty, text: nonempty }),
       input
     )
     validate(nonempty, session.nativeSessionId)
-    if (this.runs.has(input.runId) || this.threads.has(session.nativeSessionId)) {
+    if (this.#runs.has(input.runId) || this.#threads.has(session.nativeSessionId)) {
       throw new RuntimeError('RUN_CONFLICT', 'Session already has an active run')
     }
     return await new Promise<AdapterOutcome>((resolve) => {
@@ -256,9 +258,9 @@ export class CodexProcess implements RuntimeAdapter {
         runId: input.runId,
         threadId: session.nativeSessionId
       }
-      this.runs.set(input.runId, run)
-      this.threads.set(session.nativeSessionId, run)
-      void this.begin(
+      this.#runs.set(input.runId, run)
+      this.#threads.set(session.nativeSessionId, run)
+      void this.#begin(
         run,
         session,
         input.context ? `<project_memory>\n${input.context}\n</project_memory>\n\n${input.text}` : input.text
@@ -270,14 +272,14 @@ export class CodexProcess implements RuntimeAdapter {
    * Interrupt the selected native turn; repeated calls share its cancellation acknowledgement.
    */
   async cancel(runId: string): Promise<void> {
-    this.checkOpen()
-    const run = this.runs.get(runId)
+    this.#checkOpen()
+    const run = this.#runs.get(runId)
     if (!run || run.finished || run.outcome) {
       return
     }
     run.cancelRequested = true
     run.cancellation ??= Promise.withResolvers<void>()
-    this.sendCancellation(run)
+    this.#sendCancellation(run)
     await run.cancellation.promise
   }
 
@@ -287,8 +289,8 @@ export class CodexProcess implements RuntimeAdapter {
    * @throws {@link RuntimeError} if the request is unavailable, already claimed, or not confirmed.
    */
   async respondApproval(runId: string, nativeRequestId: string | number, decision: ApprovalDecision): Promise<void> {
-    this.checkOpen()
-    const run = this.runs.get(runId)
+    this.#checkOpen()
+    const run = this.#runs.get(runId)
     const approval = run?.approvals.get(nativeRequestId)
     if (!(run?.client && approval)) {
       throw new RuntimeError('APPROVAL_NOT_FOUND', 'No approval request for run')
@@ -303,7 +305,7 @@ export class CodexProcess implements RuntimeAdapter {
     const confirmation = Promise.withResolvers<void>()
     approval.confirmation = confirmation
     const uncertain = () => new RuntimeError('APPROVAL_RESPONSE_UNCERTAIN', 'Approval response was not confirmed')
-    const timer = setTimeout(() => confirmation.reject(uncertain()), this.options.requestTimeoutMs ?? 15_000)
+    const timer = setTimeout(() => confirmation.reject(uncertain()), this.#options.requestTimeoutMs ?? 15_000)
     // Observe confirmation before writing: a very fast native resolution may arrive first.
     const result = confirmation.promise.finally(() => clearTimeout(timer))
     void run.client
@@ -323,8 +325,8 @@ export class CodexProcess implements RuntimeAdapter {
 
   /** Answer questions without granting tool permissions, awaiting native resolution. */
   async respondInput(runId: string, nativeRequestId: string | number, answers: InputAnswers): Promise<void> {
-    this.checkOpen()
-    const run = this.runs.get(runId)
+    this.#checkOpen()
+    const run = this.#runs.get(runId)
     const input = run?.inputs.get(nativeRequestId)
     if (!(run?.client && input)) {
       throw new RuntimeError('INPUT_NOT_FOUND', 'No input request for run')
@@ -339,7 +341,7 @@ export class CodexProcess implements RuntimeAdapter {
     const confirmation = Promise.withResolvers<void>()
     input.confirmation = confirmation
     const uncertain = () => new RuntimeError('INPUT_RESPONSE_UNCERTAIN', 'Input response was not confirmed')
-    const timer = setTimeout(() => confirmation.reject(uncertain()), this.options.requestTimeoutMs ?? 15_000)
+    const timer = setTimeout(() => confirmation.reject(uncertain()), this.#options.requestTimeoutMs ?? 15_000)
     const result = confirmation.promise.finally(() => clearTimeout(timer))
     void run.client.reply(nativeRequestId, payload).catch(() => confirmation.reject(uncertain()))
     await result
@@ -349,53 +351,53 @@ export class CodexProcess implements RuntimeAdapter {
    * Close the shared app-server and fail unfinished runs; repeated calls share completion.
    */
   dispose(): Promise<void> {
-    if (!this.closing) {
-      this.disposed = true
-      this.closing = (async () => {
-        await this.client?.close()
-        for (const run of this.runs.values()) {
-          this.fail(run, new RuntimeError('PROCESS_EXITED', 'Codex runtime disposed'))
+    if (!this.#closing) {
+      this.#disposed = true
+      this.#closing = (async () => {
+        await this.#client?.close()
+        for (const run of this.#runs.values()) {
+          this.#fail(run, new RuntimeError('PROCESS_EXITED', 'Codex runtime disposed'))
         }
-        this.loaded.clear()
+        this.#loaded.clear()
       })()
     }
-    return this.closing
+    return this.#closing
   }
 
-  private checkOpen(): void {
-    if (this.disposed) {
+  #checkOpen(): void {
+    if (this.#disposed) {
       throw new RuntimeError('DISPOSED', 'Codex runtime disposed')
     }
   }
   updateResources = async (resources: ResourceSnapshot): Promise<void> => {
-    this.checkOpen()
-    if (this.runs.size > 0) {
+    this.#checkOpen()
+    if (this.#runs.size > 0) {
       throw new RuntimeError('RESOURCES_UPDATING', 'Project has active runs')
     }
-    const home = this.options.codexHome
+    const home = this.#options.codexHome
     if (!home) {
       throw new RuntimeError('RESOURCE_PREPARATION_FAILED', 'Missing project home')
     }
     await writeFile(join(home, 'config.toml'), resourceConfig(resources), { mode: 0o600 })
-    this.resources = resources
-    this.prepared.clear()
-    await (await this.start()).request('config/mcpServer/reload', {})
+    this.#resources = resources
+    this.#prepared.clear()
+    await (await this.#start()).request('config/mcpServer/reload', {})
   }
 
-  private checkClient(client: JsonRpcClient): void {
-    this.checkOpen()
-    if (this.client !== client) {
+  #checkClient(client: JsonRpcClient): void {
+    this.#checkOpen()
+    if (this.#client !== client) {
       throw new RuntimeError('PROCESS_EXITED', 'App-server generation ended')
     }
   }
-  private sessionOptions(value: unknown, model?: string) {
+  #sessionOptions(value: unknown, model?: string) {
     const options = validate(SessionOptionsSchema, value)
     return {
       ...options,
-      model: validate(nonempty, model ?? options.model ?? this.options.model)
+      model: validate(nonempty, model ?? options.model ?? this.#options.model)
     }
   }
-  private async directory(value: string): Promise<string> {
+  async #directory(value: string): Promise<string> {
     validate(nonempty, value)
     try {
       const cwd = await realpath(value)
@@ -409,8 +411,8 @@ export class CodexProcess implements RuntimeAdapter {
   }
 
   /** Copy only the explicitly resumed native thread; never import CLI history wholesale. */
-  private async importLegacyHistory(nativeSessionId: string): Promise<void> {
-    const home = this.options.codexHome
+  async #importLegacyHistory(nativeSessionId: string): Promise<void> {
+    const home = this.#options.codexHome
     if (!(home && /^[a-f0-9-]{36}$/iu.test(nativeSessionId))) {
       return
     }
@@ -437,7 +439,7 @@ export class CodexProcess implements RuntimeAdapter {
       await markOwned()
       return
     }
-    const source = await realpath(this.legacyHome).catch((error: NodeJS.ErrnoException) => {
+    const source = await realpath(this.#legacyHome).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') {
         return undefined
       }
@@ -471,8 +473,8 @@ export class CodexProcess implements RuntimeAdapter {
     }
   }
 
-  private checkResourceConfig = (servers: Record<string, unknown>): void => {
-    if (!this.resources) {
+  #checkResourceConfig = (servers: Record<string, unknown>): void => {
+    if (!this.#resources) {
       return
     }
     const actual = servers.project_resources
@@ -482,8 +484,8 @@ export class CodexProcess implements RuntimeAdapter {
     const config = actual as Record<string, unknown>
     const allowed = ['url', 'http_headers', 'enabled', 'required', 'environment_id', 'tool_timeout_sec']
     if (
-      config.url !== this.resources.url ||
-      JSON.stringify(config.http_headers) !== JSON.stringify({ Authorization: this.resources.token }) ||
+      config.url !== this.#resources.url ||
+      JSON.stringify(config.http_headers) !== JSON.stringify({ Authorization: this.#resources.token }) ||
       (config.environment_id != null && config.environment_id !== 'local') ||
       Object.keys(config).some((key) => !allowed.includes(key))
     ) {
@@ -491,15 +493,15 @@ export class CodexProcess implements RuntimeAdapter {
     }
   }
 
-  private async prepareResources(client: JsonRpcClient, cwd: string): Promise<JsonObject> {
-    let pending = this.prepared.get(cwd)
+  async #prepareResources(client: JsonRpcClient, cwd: string): Promise<JsonObject> {
+    let pending = this.#prepared.get(cwd)
     if (!pending) {
       pending = (async () => {
         const selected = new Set(
-          (this.resources?.skillDirectories ?? []).map((directory) => join(directory, 'SKILL.md'))
+          (this.#resources?.skillDirectories ?? []).map((directory) => join(directory, 'SKILL.md'))
         )
         await client.request('skills/extraRoots/set', {
-          extraRoots: [...new Set((this.resources?.skillDirectories ?? []).map(dirname))]
+          extraRoots: [...new Set((this.#resources?.skillDirectories ?? []).map(dirname))]
         })
         const schema = z.object({
           data: z.array(z.object({ skills: z.array(z.object({ enabled: z.boolean(), path: z.string() })) }))
@@ -533,65 +535,65 @@ export class CodexProcess implements RuntimeAdapter {
           }),
           await client.request('config/read', { cwd, includeLayers: false })
         )
-        this.checkResourceConfig(settings.config.mcp_servers)
-        this.checkClient(client)
+        this.#checkResourceConfig(settings.config.mcp_servers)
+        this.#checkClient(client)
         return {
           features: { apps: false },
           // biome-ignore lint/style/useNamingConvention: Native configuration key.
           mcp_servers: Object.fromEntries(
             Object.keys(settings.config.mcp_servers).map((name) => [
               name,
-              { enabled: !!this.resources && name === 'project_resources' }
+              { enabled: !!this.#resources && name === 'project_resources' }
             ])
           )
         }
       })()
-      this.prepared.set(cwd, pending)
+      this.#prepared.set(cwd, pending)
     }
     try {
       return await pending
     } finally {
-      if (this.prepared.get(cwd) === pending) {
-        this.prepared.delete(cwd)
+      if (this.#prepared.get(cwd) === pending) {
+        this.#prepared.delete(cwd)
       }
     }
   }
 
-  private start(): Promise<JsonRpcClient> {
-    this.checkOpen()
-    if (!this.starting) {
-      const executable = this.options.executable ?? { command: 'codex' }
+  #start(): Promise<JsonRpcClient> {
+    this.#checkOpen()
+    if (!this.#starting) {
+      const executable = this.#options.executable ?? { command: 'codex' }
       const client = new JsonRpcClient({
         args: [...(executable.args ?? []), 'app-server'],
         command: executable.command,
         // biome-ignore lint/style/useNamingConvention: Native environment variable.
-        env: { ...process.env, CODEX_HOME: this.options.codexHome, HOME: this.userHome },
-        requestTimeoutMs: this.options.requestTimeoutMs,
-        shutdownTimeoutMs: this.options.shutdownTimeoutMs
+        env: { ...process.env, CODEX_HOME: this.#options.codexHome, HOME: this.#userHome },
+        requestTimeoutMs: this.#options.requestTimeoutMs,
+        shutdownTimeoutMs: this.#options.shutdownTimeoutMs
       })
-      this.client = client
+      this.#client = client
       client.onFrame((frame) => {
-        if (this.client === client) {
-          this.route(client, frame)
+        if (this.#client === client) {
+          this.#route(client, frame)
         }
       })
       client.onExit((error) => {
-        if (this.client === client) {
-          this.client = undefined
-          this.starting = undefined
-          this.loaded.clear()
-          this.prepared.clear()
+        if (this.#client === client) {
+          this.#client = undefined
+          this.#starting = undefined
+          this.#loaded.clear()
+          this.#prepared.clear()
         }
-        for (const run of this.runs.values()) {
+        for (const run of this.#runs.values()) {
           if (run.client !== client || (run.nativeEnded && run.responseDone)) {
             continue
           }
           run.nativeEnded = true
           run.onNativeEnd?.()
-          this.fail(run, error)
+          this.#fail(run, error)
         }
       })
-      this.starting = (async () => {
+      this.#starting = (async () => {
         try {
           const params = {
             capabilities: null,
@@ -599,7 +601,7 @@ export class CodexProcess implements RuntimeAdapter {
           } satisfies InitializeParams
           await client.request('initialize', params)
           await client.notify('initialized', {})
-          this.checkClient(client)
+          this.#checkClient(client)
           return client
         } catch (error) {
           await client.close()
@@ -607,17 +609,17 @@ export class CodexProcess implements RuntimeAdapter {
         }
       })()
     }
-    return this.starting
+    return this.#starting
   }
 
-  private async begin(run: ActiveRun, session: NativeSession, text: string): Promise<void> {
+  async #begin(run: ActiveRun, session: NativeSession, text: string): Promise<void> {
     try {
       await this.resumeSession(session)
-      this.checkOpen()
+      this.#checkOpen()
       if (run.finished) {
         return
       }
-      const client = this.client
+      const client = this.#client
       if (!client) {
         throw new RuntimeError('PROCESS_EXITED', 'App-server generation ended before turn start')
       }
@@ -632,25 +634,29 @@ export class CodexProcess implements RuntimeAdapter {
         return
       }
       if (run.turnId && run.turnId !== turn.id) {
-        this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Started turn identity does not match notifications'))
+        this.#fail(run, new RuntimeError('PROTOCOL_ERROR', 'Started turn identity does not match notifications'))
         await client.close()
         return
       }
-      this.bind(run, turn.id)
+      this.#bind(run, turn.id)
       run.responseDone = true
       if (turn.status !== 'inProgress') {
-        this.route(client, { kind: 'notification', method: 'turn/completed', params: { threadId: run.threadId, turn } })
+        this.#route(client, {
+          kind: 'notification',
+          method: 'turn/completed',
+          params: { threadId: run.threadId, turn }
+        })
       }
-      this.pump(run)
+      this.#pump(run)
     } catch (error) {
       run.responseDone = true
-      this.fail(run, failure(error))
+      this.#fail(run, failure(error))
     }
   }
 
-  private route(client: JsonRpcClient, frame: Frame): void {
+  #route(client: JsonRpcClient, frame: Frame): void {
     if (frame.kind === 'server-request') {
-      this.handleRequest(client, frame)
+      this.#handleRequest(client, frame)
       return
     }
     if (
@@ -665,13 +671,13 @@ export class CodexProcess implements RuntimeAdapter {
     if (typeof threadId !== 'string') {
       return
     }
-    const run = this.threads.get(threadId)
+    const run = this.#threads.get(threadId)
     if (!run || run.client !== client || run.finished) {
       return
     }
     const method = frame.method
     if (method === 'serverRequest/resolved') {
-      this.resolveRequest(run, frame)
+      this.#resolveRequest(run, frame)
       return
     }
     if (
@@ -695,7 +701,7 @@ export class CodexProcess implements RuntimeAdapter {
     if (typeof turnId !== 'string' || (run.turnId && run.turnId !== turnId)) {
       return
     }
-    this.bind(run, turnId)
+    this.#bind(run, turnId)
     if (method === 'turn/completed') {
       run.nativeEnded = true
       run.onNativeEnd?.()
@@ -703,24 +709,24 @@ export class CodexProcess implements RuntimeAdapter {
     if (run.fault) {
       return
     }
-    this.enqueue(run, { bytes: Buffer.byteLength(JSON.stringify(frame)), frame })
+    this.#enqueue(run, { bytes: Buffer.byteLength(JSON.stringify(frame)), frame })
   }
 
-  private handleRequest(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
+  #handleRequest(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
     if (
       frame.method === 'item/commandExecution/requestApproval' ||
       frame.method === 'item/fileChange/requestApproval'
     ) {
-      this.requestApproval(client, frame)
+      this.#requestApproval(client, frame)
       return
     }
     let result: Json | undefined
     switch (frame.method) {
       case 'item/tool/requestUserInput':
-        this.requestInput(client, frame)
+        this.#requestInput(client, frame)
         return
       case 'mcpServer/elicitation/request':
-        if (this.requestToolApproval(client, frame)) {
+        if (this.#requestToolApproval(client, frame)) {
           return
         }
         result = parseProtocol(DeclineElicitationSchema, { _meta: null, action: 'decline', content: null })
@@ -735,11 +741,11 @@ export class CodexProcess implements RuntimeAdapter {
     }
     const params = frame.params
     const threadId = params && typeof params === 'object' && !Array.isArray(params) ? params.threadId : undefined
-    const run = typeof threadId === 'string' ? this.threads.get(threadId) : undefined
+    const run = typeof threadId === 'string' ? this.#threads.get(threadId) : undefined
     void client.replyError(frame.id, -32601, 'Unsupported server request').then(
       () => {
         if (run && run.client === client && !run.finished) {
-          this.fail(run, new RuntimeError('UNSUPPORTED_REQUEST', 'Unsupported native request'))
+          this.#fail(run, new RuntimeError('UNSUPPORTED_REQUEST', 'Unsupported native request'))
         } else {
           void client.close()
         }
@@ -748,22 +754,22 @@ export class CodexProcess implements RuntimeAdapter {
     )
   }
 
-  private resolveRequest(run: ActiveRun, frame: Notification): void {
+  #resolveRequest(run: ActiveRun, frame: Notification): void {
     const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
     const approval = run.approvals.get(requestId) ?? run.inputs.get(requestId)
     if (!approval || approval.resolved) {
       return
     }
     approval.resolved = true
-    this.enqueue(run, {
+    this.#enqueue(run, {
       bytes: Buffer.byteLength(JSON.stringify(frame)),
       frame,
       responseAttempted: approval.responding
     })
   }
 
-  private requestToolApproval = (client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): boolean => {
-    if (!this.resources) {
+  #requestToolApproval = (client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): boolean => {
+    if (!this.#resources) {
       return false
     }
     const parsed = z.safeParse(ElicitationApprovalSchema, frame.params)
@@ -771,7 +777,7 @@ export class CodexProcess implements RuntimeAdapter {
       return false
     }
     const params = parsed.data
-    const run = this.threads.get(params.threadId)
+    const run = this.#threads.get(params.threadId)
     if (
       !run ||
       run.client !== client ||
@@ -783,13 +789,13 @@ export class CodexProcess implements RuntimeAdapter {
       return false
     }
     if (run.approvals.has(frame.id) || run.inputs.has(frame.id)) {
-      this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native approval request'))
+      this.#fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native approval request'))
       return true
     }
-    this.bind(run, params.turnId)
+    this.#bind(run, params.turnId)
     const allowedDecisions: ApprovalDecision[] = ['approve', 'deny']
     run.approvals.set(frame.id, { allowedDecisions, elicitation: true, resolved: false, responding: false })
-    this.enqueue(run, {
+    this.#enqueue(run, {
       bytes: Buffer.byteLength(JSON.stringify(frame)),
       notice: {
         kind: 'approval',
@@ -804,10 +810,10 @@ export class CodexProcess implements RuntimeAdapter {
     return true
   }
 
-  private requestApproval(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
+  #requestApproval(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
     const command = frame.method === 'item/commandExecution/requestApproval'
     const params = parseProtocol(command ? CommandApprovalSchema : FileApprovalSchema, frame.params)
-    const run = this.threads.get(params.threadId)
+    const run = this.#threads.get(params.threadId)
     if (
       !run ||
       run.client !== client ||
@@ -821,10 +827,10 @@ export class CodexProcess implements RuntimeAdapter {
       return
     }
     if (run.approvals.has(frame.id) || run.inputs.has(frame.id)) {
-      this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native approval request'))
+      this.#fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native approval request'))
       return
     }
-    this.bind(run, params.turnId)
+    this.#bind(run, params.turnId)
     const available = params.availableDecisions
     const allowedDecisions: ApprovalDecision[] = []
     if (!available || available.includes('accept')) {
@@ -835,14 +841,14 @@ export class CodexProcess implements RuntimeAdapter {
     }
     if (allowedDecisions.length === 0) {
       void client.replyError(frame.id, -32601, 'No supported approval decision').then(
-        () => this.fail(run, new RuntimeError('UNSUPPORTED_APPROVAL', 'No supported approval decision')),
+        () => this.#fail(run, new RuntimeError('UNSUPPORTED_APPROVAL', 'No supported approval decision')),
         () => client.close()
       )
       return
     }
     run.approvals.set(frame.id, { allowedDecisions, resolved: false, responding: false })
     const detail = JSON.parse(JSON.stringify(params)) as JsonObject
-    this.enqueue(run, {
+    this.#enqueue(run, {
       bytes: Buffer.byteLength(JSON.stringify(frame)),
       notice: {
         kind: 'approval',
@@ -851,9 +857,9 @@ export class CodexProcess implements RuntimeAdapter {
     })
   }
 
-  private requestInput(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
+  #requestInput(client: JsonRpcClient, frame: Extract<Frame, { kind: 'server-request' }>): void {
     const params = parseProtocol(UserInputSchema, frame.params)
-    const run = this.threads.get(params.threadId)
+    const run = this.#threads.get(params.threadId)
     if (
       !run ||
       run.client !== client ||
@@ -865,32 +871,32 @@ export class CodexProcess implements RuntimeAdapter {
       return
     }
     if (run.inputs.has(frame.id) || run.approvals.has(frame.id)) {
-      this.fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native input request'))
+      this.#fail(run, new RuntimeError('PROTOCOL_ERROR', 'Duplicate native input request'))
       return
     }
-    this.bind(run, params.turnId)
+    this.#bind(run, params.turnId)
     run.inputs.set(frame.id, { resolved: false, responding: false })
-    this.enqueue(run, {
+    this.#enqueue(run, {
       bytes: Buffer.byteLength(JSON.stringify(frame)),
       notice: { kind: 'input', request: { nativeRequestId: frame.id, questions: params.questions } }
     })
   }
 
-  private sendCancellation(run: ActiveRun): void {
+  #sendCancellation(run: ActiveRun): void {
     if (run.cancelRequested && run.turnId && run.cancellation) {
-      void this.interrupt(run).then(run.cancellation.resolve, run.cancellation.reject)
+      void this.#interrupt(run).then(run.cancellation.resolve, run.cancellation.reject)
     }
   }
 
-  private bind(run: ActiveRun, turnId: string): void {
+  #bind(run: ActiveRun, turnId: string): void {
     if (!run.turnId) {
       run.turnId = turnId
-      this.enqueue(run, { bytes: turnId.length, notice: { kind: 'started', nativeTurnId: turnId } })
+      this.#enqueue(run, { bytes: turnId.length, notice: { kind: 'started', nativeTurnId: turnId } })
     }
-    this.sendCancellation(run)
+    this.#sendCancellation(run)
   }
 
-  private interrupt(run: ActiveRun): Promise<void> {
+  #interrupt(run: ActiveRun): Promise<void> {
     if (!run.interrupt && run.client && run.turnId) {
       run.interrupt = run.client
         .request('turn/interrupt', { threadId: run.threadId, turnId: run.turnId })
@@ -905,21 +911,21 @@ export class CodexProcess implements RuntimeAdapter {
     return run.interrupt ?? Promise.resolve()
   }
 
-  private enqueue(run: ActiveRun, entry: QueueEntry): void {
+  #enqueue(run: ActiveRun, entry: QueueEntry): void {
     if (run.finished || run.fault || run.outcome) {
       return
     }
     if (run.count + 1 > 1024 || run.bytes + entry.bytes > 8 * 1024 * 1024) {
-      this.fail(run, new RuntimeError('STREAM_OVERFLOW', 'Run notification queue exceeded its limit'))
+      this.#fail(run, new RuntimeError('STREAM_OVERFLOW', 'Run notification queue exceeded its limit'))
       return
     }
     run.queue.push(entry)
     run.count++
     run.bytes += entry.bytes
-    this.pump(run)
+    this.#pump(run)
   }
 
-  private fail(run: ActiveRun, error: RuntimeError): void {
+  #fail(run: ActiveRun, error: RuntimeError): void {
     if (run.finished || run.fault) {
       return
     }
@@ -938,13 +944,13 @@ export class CodexProcess implements RuntimeAdapter {
       }
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        await this.interrupt(run)
+        await this.#interrupt(run)
         if (!run.nativeEnded) {
           await new Promise<void>((resolve, reject) => {
             run.onNativeEnd = resolve
             timer = setTimeout(
               () => reject(new RuntimeError('RPC_TIMEOUT', 'Native interruption was not confirmed')),
-              this.options.requestTimeoutMs ?? 15_000
+              this.#options.requestTimeoutMs ?? 15_000
             )
           })
         }
@@ -955,39 +961,39 @@ export class CodexProcess implements RuntimeAdapter {
         run.onNativeEnd = undefined
       }
     })()
-    this.pump(run)
+    this.#pump(run)
   }
 
-  private pump(run: ActiveRun): void {
+  #pump(run: ActiveRun): void {
     if (run.pumping || run.finished) {
       return
     }
     run.pumping = true
-    void this.drain(run)
+    void this.#drain(run)
       .catch(async (error) => {
         if (run.fault) {
           await run.stopping
-          this.complete(run, failed(run.fault))
+          this.#complete(run, failed(run.fault))
         } else {
-          this.fail(run, failure(error))
+          this.#fail(run, failure(error))
         }
       })
       .finally(() => {
         run.pumping = false
         if (!run.finished && (run.queue.length > 0 || (run.outcome && run.responseDone))) {
-          this.pump(run)
+          this.#pump(run)
         }
       })
   }
 
-  private async drain(run: ActiveRun): Promise<void> {
+  async #drain(run: ActiveRun): Promise<void> {
     let entry = run.queue.shift()
     while (entry) {
       if (entry.notice) {
         await run.emit(entry.notice)
       }
       if (entry.frame) {
-        await this.project(run, entry.frame, entry.responseAttempted)
+        await this.#project(run, entry.frame, entry.responseAttempted)
       }
       run.count--
       run.bytes -= entry.bytes
@@ -998,11 +1004,11 @@ export class CodexProcess implements RuntimeAdapter {
       for (const notice of run.mapper.finish(run.outcome)) {
         await run.emit(notice)
       }
-      this.complete(run, run.outcome)
+      this.#complete(run, run.outcome)
     }
   }
 
-  private async project(run: ActiveRun, frame: Notification, responseAttempted?: boolean): Promise<void> {
+  async #project(run: ActiveRun, frame: Notification, responseAttempted?: boolean): Promise<void> {
     if (frame.method === 'serverRequest/resolved') {
       const { requestId } = parseProtocol(RequestResolvedSchema, frame.params)
       const input = run.inputs.get(requestId)
@@ -1032,7 +1038,7 @@ export class CodexProcess implements RuntimeAdapter {
           : failed(new RuntimeError('RUN_FAILED', 'Codex turn failed'))
   }
 
-  private complete(run: ActiveRun, outcome: AdapterOutcome): void {
+  #complete(run: ActiveRun, outcome: AdapterOutcome): void {
     run.finished = true
     run.cancellation?.resolve()
     for (const approval of run.approvals.values()) {
@@ -1045,8 +1051,8 @@ export class CodexProcess implements RuntimeAdapter {
     }
     run.inputs.clear()
     run.approvals.clear()
-    this.runs.delete(run.runId)
-    this.threads.delete(run.threadId)
+    this.#runs.delete(run.runId)
+    this.#threads.delete(run.threadId)
     run.resolve(outcome)
   }
 }

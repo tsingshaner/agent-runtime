@@ -28,3 +28,18 @@ This first version requires an existing managed Session as context, supports tex
 The smoke uses the built Nitro server and real HTTP without model credentials. Full execution, interaction, stream/reconnect and persistence are covered using real PGlite and a controlled adapter in `packages/runtime/src/a2a.test.ts`. This does not claim live native interaction coverage.
 
 Protocol references: [A2A specification](https://a2a-protocol.org/latest/specification/), [official TypeScript SDK](https://github.com/a2aproject/a2a-js).
+
+
+Explicit native protocol acceptance (no hosted credentials):
+
+```sh
+RUN_NATIVE_PROTOCOL_SMOKE=1 pnpm --filter @internal/a2a-example smoke:native
+```
+
+This launches the built Nitro service, real DSH Harness processes and real tools against a
+local deterministic HTTP/SSE model provider. It exercises the official A2A client and the
+TanStack example's typed client: input continuation, approved/denied shell effects,
+cancellation while waiting for approval, stable Task/Run identity and terminal Task rejection.
+The shell effect is confined to a temporary project directory and removed on completion.
+Each result is labelled `native-deterministic`; this verifies native protocol integration,
+not hosted-model behavior. Without the explicit flag, `node native-smoke.ts` reports `SKIPPED`.

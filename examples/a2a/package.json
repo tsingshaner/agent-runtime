@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node main.ts",
-    "smoke": "pnpm -w build && pnpm --filter @internal/server build && node smoke.ts"
+    "smoke": "pnpm -w build && pnpm --filter @internal/server build && node smoke.ts",
+    "smoke:native": "pnpm -w build && pnpm --filter @internal/server build && node native-smoke.ts"
   },
   "dependencies": {
     "@a2a-js/sdk": "1.2.0"

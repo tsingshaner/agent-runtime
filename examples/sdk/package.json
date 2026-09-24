@@ -8,11 +8,15 @@
   "scripts": {
     "start": "pnpm --workspace-root build && node main.ts",
     "smoke": "pnpm --workspace-root build && node smoke.ts",
+    "smoke:package": "pnpm --workspace-root build && node package-smoke.ts",
+    "smoke:cross-runtime": "pnpm --workspace-root build && node --env-file-if-exists=../../.env.local cross-runtime-smoke.ts",
     "smoke:resources": "pnpm --workspace-root build && node resources-smoke.ts"
   },
   "dependencies": {
     "@qingshaner/runtime": "workspace:*",
     "@qingshaner/runtime-codex": "workspace:*",
+    "@qingshaner/runtime-dsh": "workspace:*",
+    "@qingshaner/runtime-deepagents": "workspace:*",
     "@qingshaner/memory": "workspace:*",
     "@modelcontextprotocol/sdk": "catalog:",
     "@qingshaner/knowledge": "workspace:*",

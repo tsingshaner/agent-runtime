@@ -30,6 +30,19 @@
     "packages/memory": {
       "entry": ["src/index.ts", "test/gateway.fixture.ts"]
     },
+    "packages/runtime-deepagents": {
+      "entry": ["src/index.ts", "test/mcp.fixture.ts"]
+    },
+    "packages/runtime-dsh": {
+      "entry": ["src/index.ts", "src/control.ts"],
+      "ignoreDependencies": [
+        "@deepseek-ai/dsh",
+        "@deepseek-ai/dsh-tool-ask-user",
+        "@deepseek-ai/dsh-mcp-client",
+        "@deepseek-ai/dsh-skill-filesystem",
+        "@deepseek-ai/dsh-tool-skill"
+      ]
+    },
     "packages/shared": {
       "ignoreDependencies": ["es-toolkit"]
     }

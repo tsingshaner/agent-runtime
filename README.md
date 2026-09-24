@@ -1,11 +1,13 @@
 # Agent Runtime
 
-Node.js 24、ESM 的 Codex SDK：以 PGlite 保存统一会话、运行状态和 AG-UI 事件。
-当前交付仅包含 SDK，不含 HTTP、SSE、A2A 或浏览器客户端。
+Node.js 24、ESM 的多 runtime SDK：通过同一个 Manager 使用 Codex、DeepSeek Harness 和 Deep Agents，以 PGlite 保存统一会话、运行状态和 AG-UI 事件。提供本地 HTTP 服务、TanStack AI 与 A2A 接入，以及项目 Knowledge、Skill、MCP 和共享 Memory。
 
 - [@qingshaner/runtime](packages/runtime/README.md)：公共会话管理和本地持久化。
 - [@qingshaner/runtime-codex](packages/runtime-codex/README.md)：Codex app-server 适配器。
-- [SDK 示例](examples/sdk/main.ts) 与 [显式冒烟](examples/sdk/smoke.ts)。
+- [@qingshaner/runtime-dsh](packages/runtime-dsh/README.md)：每会话独立 Harness 进程。
+- [@qingshaner/runtime-deepagents](packages/runtime-deepagents/README.md)：持久化原生图与人工交互。
+- [SDK 示例与验收](examples/sdk/README.md)、[本地服务](apps/server/README.md)、[TanStack AI](examples/tanstack/README.md)、[A2A](examples/a2a/README.md)。
+- [验收矩阵与验证边界](docs/runtime-acceptance.md)。
 
 ## 本地运行
 
@@ -20,7 +22,7 @@ CODEX_MODEL=your-model pnpm example:sdk
 CODEX_MODEL=your-model SESSION_ID=public-session-id pnpm example:sdk
 ```
 
-示例保存数据到当前工作目录下 `.agent-runtime`，打印公共 ID 与完整事件，并拒绝所有审批。
+示例保存数据到当前工作目录下 `.agent-runtime`，打印公共 ID 与完整事件；终端中逐项询问审批，无终端时拒绝审批。通过 `RUNTIME` 和 `RUNTIME_MODEL` 选择 runtime 与模型，配置方式见 SDK 示例。
 通过 workspace 包的公开 exports 运行；Node 24 原生运行 TypeScript，不需要额外脚本运行器。
 使用 workspace 脚本时工作目录为 `examples/sdk`。需要其他工作目录时，build 后从目标目录运行示例的绝对路径。
 
@@ -30,7 +32,7 @@ CODEX_MODEL=your-model SESSION_ID=public-session-id pnpm example:sdk
 - 公共 `session.id`、`runId` 与 Codex 原生 thread/turn ID 不同。调用管理器接口时使用公共 ID；会话固定绑定 runtime。
 - 只管理 SDK 创建并成功保存的会话，不扫描或导入 Codex CLI 历史。
 - 一个数据目录只允许一个活跃 Manager；仅支持本地文件系统，不支持共享网络目录或多进程写入。
-- 每个 CodexRuntime 懒启动并拥有一个 app-server，多会话共享进程；同一会话只允许一个非终态运行。
+- Codex 按项目懒启动共享 app-server，DSH 每会话独立进程，Deep Agents 使用原生持久 checkpoint；同一会话只允许一个非终态运行。
 - 事件先写入数据库再发布，序号从 1 连续增长。`subscribe(runId, { afterSequence })` 从已消费游标之后重放。退出订阅、调用迭代器 return 或中止订阅不等于取消运行。
 - `cancel()` 的 RPC 成功只表示取消请求已被接受；仍须订阅终态或查询 `getRun()`。普通取消不终止共享进程。
 - 事件永久保存并持续占用磁盘。终态运行可调用 `clearRunEvents(runId)` 清理事件；状态和元数据保留，后续订阅抛出 `EVENTS_CLEARED`。

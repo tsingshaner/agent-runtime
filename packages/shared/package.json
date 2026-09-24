@@ -34,10 +34,7 @@
   "license": "ISC",
   "main": "dist/index.mjs",
   "name": "@internal/shared",
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
+  "private": true,
   "repository": {
     "type": "git",
     "url": "https://github.com/tsingshaner/agent-runtime.git"

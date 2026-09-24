@@ -105,3 +105,20 @@ transport migration; real-model smoke must be explicitly rerun to claim that.
 The authenticated `/.well-known/agent-card.json` advertises A2A 1.0 JSON-RPC at `/a2a`, using the same Manager and bearer/Host/Origin checks as REST. The A2A routes are separate from the oRPC AG-UI event stream and are not included in `/spec.json`.
 
 Create a managed Session through REST, then send its ID as A2A `message.contextId`. Task IDs are independent of Run IDs and remain queryable after restart. See the [official-client example](../../examples/a2a/README.md) for submission, SSE snapshots, input/approval replies, cancellation, and the explicit no-model HTTP smoke command.
+
+## Three-runtime hosted acceptance
+
+After building the workspace and Nitro, run from the repository root:
+
+```sh
+RUN_RUNTIME_SMOKE=1 CODEX_MODEL=gpt-6-astra \
+  DSH_MODEL=deepseek-v4-flash DEEPAGENTS_MODEL=deepseek-v4-flash \
+  DEEPAGENTS_API_KEY_ENV=DEEPSEEK_API_KEY DEEPAGENTS_BASE_URL=https://api.deepseek.com \
+  node --env-file=.env.local apps/server/multi-runtime-smoke.ts
+```
+
+This uses three actual runtimes concurrently, then restarts the built service and
+checks native history using public HTTP APIs. Credentials come from the environment.
+Without explicit opt-in it prints SKIPPED. Input/approval/cancellation over HTTP
+are covered separately by the [native protocol smoke](../../examples/a2a/README.md).
+See the [acceptance matrix](../../docs/runtime-acceptance.md) for versions and limits.

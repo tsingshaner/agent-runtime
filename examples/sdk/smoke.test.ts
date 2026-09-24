@@ -19,3 +19,11 @@ describe('real Codex smoke opt-in', () => {
     expect(output.trim()).toBe('SKIPPED: real Codex smoke not run')
   })
 })
+
+test('skips cross-runtime model and memory calls without explicit opt-in', () => {
+  const output = execFileSync(process.execPath, [fileURLToPath(new URL('./cross-runtime-smoke.ts', import.meta.url))], {
+    encoding: 'utf8',
+    env: { ...process.env, RUN_CROSS_RUNTIME_SMOKE: '' }
+  })
+  expect(output.trim()).toBe('SKIPPED: set RUN_CROSS_RUNTIME_SMOKE=1 for live three-runtime memory verification')
+})

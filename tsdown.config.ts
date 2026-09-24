@@ -12,6 +12,7 @@ const packages = [
   ['mcp', '@qingshaner/mcp'],
   ['shared', '@internal/shared'],
   ['runtime-codex', '@qingshaner/runtime-codex'],
+  ['runtime-dsh', '@qingshaner/runtime-dsh'],
   ['runtime-deepagents', '@qingshaner/runtime-deepagents']
 ] as const
 const alias = Object.fromEntries(
@@ -23,9 +24,10 @@ export default defineConfig(
     alias,
     cwd: resolve(ROOT, 'packages', directory),
     deps: {
-      alwaysBundle: ['@internal/shared'],
+      alwaysBundle: [/^@internal\/shared(?:\/|$)/],
       neverBundle: [
         '@ag-ui/core',
+        /^@deepseek-ai\//,
         /^@langchain\//,
         'deepagents',
         'langchain',
@@ -45,7 +47,12 @@ export default defineConfig(
     dts: {
       tsconfig: resolve(ROOT, 'tsconfig.build.json')
     },
-    entry: directory === 'shared' ? ['src/index.ts', 'src/files.ts'] : 'src/index.ts',
+    entry:
+      directory === 'shared'
+        ? ['src/index.ts', 'src/files.ts']
+        : directory === 'runtime-dsh'
+          ? ['src/index.ts', 'src/control.ts']
+          : 'src/index.ts',
     format: 'esm',
     name,
     outDir: 'dist',

@@ -49,7 +49,12 @@ export default defineConfig(async () => {
               ? [`${replacement}/events.test.ts`]
               : []
         // Separate groups prevent database startup from competing with short native RPC deadlines.
-        const groupOrder = find === '@qingshaner/runtime' ? 1 : find === '@qingshaner/runtime-codex' ? 2 : 0
+        const native = [
+          '@qingshaner/runtime-codex',
+          '@qingshaner/runtime-dsh',
+          '@qingshaner/runtime-deepagents'
+        ].includes(find)
+        const groupOrder = find === '@qingshaner/runtime' ? 1 : native ? 2 : 0
         const groups = [
           { exclude: [...configDefaults.exclude, ...light], groupOrder, include, name: find },
           ...(light.length > 0

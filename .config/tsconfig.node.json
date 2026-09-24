@@ -9,6 +9,7 @@
       "@qingshaner/runtime": ["../packages/runtime/src/index.ts"],
       "@qingshaner/runtime-codex": ["../packages/runtime-codex/src/index.ts"],
       "@qingshaner/runtime-deepagents": ["../packages/runtime-deepagents/src/index.ts"],
+      "@qingshaner/runtime-dsh": ["../packages/runtime-dsh/src/index.ts"],
       "@qingshaner/skill": ["../packages/skill/src/index.ts"]
     },
     "rootDir": "..",

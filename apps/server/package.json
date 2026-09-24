@@ -5,6 +5,7 @@
   "scripts": {
     "start": "pnpm --workspace-root build && pnpm build && NITRO_HOST=127.0.0.1 NITRO_PORT=${PORT:-4310} node .output/server/index.mjs",
     "smoke": "pnpm --workspace-root build && pnpm build && node smoke.ts",
+    "smoke:runtimes": "pnpm --workspace-root build && pnpm build && node --env-file-if-exists=../../.env.local multi-runtime-smoke.ts",
     "smoke:resources": "pnpm --workspace-root build && pnpm build && node --env-file-if-exists=../../.env.local resources-smoke.ts",
     "build": "nitro build",
     "smoke:nitro": "pnpm --workspace-root build && pnpm build && node nitro-smoke.ts"

@@ -19,6 +19,11 @@
     "zod": "catalog:"
   },
   "description": "Deep Agents runtime with persistent native checkpoints",
+  "devDependencies": {
+    "@qingshaner/knowledge": "workspace:*",
+    "@qingshaner/mcp": "workspace:*",
+    "@qingshaner/skill": "workspace:*"
+  },
   "engines": {
     "node": ">=24.0.0",
     "pnpm": ">=12.0.0"

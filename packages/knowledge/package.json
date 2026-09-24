@@ -19,6 +19,6 @@
   },
   "dependencies": {
     "@internal/shared": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "catalog:"
   }
 }

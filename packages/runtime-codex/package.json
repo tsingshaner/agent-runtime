@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@qingshaner/runtime": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "catalog:"
   },
   "description": "Agent runtime by codex",
   "engines": {

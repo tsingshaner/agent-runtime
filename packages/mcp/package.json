@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@internal/shared": "workspace:*",
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "zod": "4.6.5"
+    "@modelcontextprotocol/sdk": "catalog:",
+    "zod": "catalog:"
   }
 }

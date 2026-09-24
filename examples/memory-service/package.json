@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@qingshaner/memory": "workspace:*",
-    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1"
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "catalog:"
   }
 }

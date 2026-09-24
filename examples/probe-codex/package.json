@@ -6,7 +6,7 @@
     "smoke": "pnpm --workspace-root build && tsdown probe.ts --no-config --format esm --out-dir dist && node main.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "catalog:",
     "@qingshaner/runtime": "workspace:*"
   }
 }

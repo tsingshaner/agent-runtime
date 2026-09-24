@@ -12,6 +12,6 @@
     "@langchain/langgraph-checkpoint-sqlite": "1.0.4",
     "deepagents": "1.13.5",
     "langchain": "1.5.11",
-    "zod": "4.6.5"
+    "zod": "catalog:"
   }
 }

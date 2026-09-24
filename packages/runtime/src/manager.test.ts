@@ -48,7 +48,7 @@ describe('RuntimeManager operations', () => {
     // Resource updates wait for final persistence and run cleanup before invoking the callback.
     await manager.updateSharedResources(async () => {
       await store.db.execute(
-        sql`TRUNCATE TABLE memory_writes, input_requests, approvals, approval_batches, events, runs, sessions`
+        sql`TRUNCATE TABLE tasks, memory_writes, input_requests, approvals, approval_batches, events, runs, sessions`
       )
     })
     adapter.reset()

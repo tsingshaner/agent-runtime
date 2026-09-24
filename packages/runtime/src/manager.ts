@@ -317,6 +317,22 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
    * @throws {@link RuntimeError} if the session is archived or already has an active run.
    */
   async run(sessionId: string, input: RunInput): Promise<{ runId: string; sessionId: string }> {
+    return await this.#run(sessionId, input)
+  }
+
+  /** Start an A2A task, reserving its independent identity with the Run. */
+  async startTask(sessionId: string, input: RunInput) {
+    const { runId } = await this.#run(sessionId, input, randomUUID())
+    return await this.#storage(() => this.#store.getTask(runId, true))
+  }
+
+  /** Read a consistent task snapshot, including its durable output and pending interactions. */
+  async getTask(taskId: string) {
+    this.#assertOpen()
+    return await this.#storage(() => this.#store.getTask(taskId))
+  }
+
+  async #run(sessionId: string, input: RunInput, taskId?: string): Promise<{ runId: string; sessionId: string }> {
     return await this.#control(async () => {
       const validated = parseInput(RunInputSchema, input)
       const session = await this.#storage(() => this.#store.getSession(sessionId))
@@ -328,7 +344,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       this.#assertProjectReady(session.projectId)
       const adapter = this.#getAdapter(session.runtime)
       const runId = randomUUID()
-      const run = await this.#storage(() => this.#store.beginRun(sessionId, runId, validated))
+      const run = await this.#storage(() => this.#store.beginRun(sessionId, runId, validated, taskId))
       if (run.id !== runId) {
         return { runId: run.id, sessionId }
       }

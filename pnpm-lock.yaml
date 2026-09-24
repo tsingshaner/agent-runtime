@@ -272,6 +272,12 @@ importers:
         specifier: 3.25.2
         version: 3.25.2(zod@4.6.5)
 
+  examples/a2a:
+    dependencies:
+      '@a2a-js/sdk':
+        specifier: 1.2.0
+        version: 1.2.0(express@5.2.1)
+
   examples/memory-service:
     dependencies:
       '@qingshaner/memory':
@@ -427,6 +433,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@a2a-js/sdk':
+        specifier: 1.2.0
+        version: 1.2.0(express@5.2.1)
       '@ag-ui/core':
         specifier: 'catalog:'
         version: 0.0.59
@@ -490,6 +499,21 @@ importers:
         version: 4.6.5
 
 packages:
+
+  '@a2a-js/sdk@1.2.0':
+    resolution: {integrity: sha512-zxjvBrxhPV4J/RN8QTbsYaUIu9Y9RvmR06IP5o42UdJX42A9I0m1StGVvqrcCQ3bdu3SzWHPm5CeC2FNHARvkw==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.10.2
+      '@grpc/grpc-js': ^1.11.0
+      express: ^4.21.2 || ^5.1.0
+    peerDependenciesMeta:
+      '@bufbuild/protobuf':
+        optional: true
+      '@grpc/grpc-js':
+        optional: true
+      express:
+        optional: true
 
   '@ag-ui/core@0.0.59':
     resolution: {integrity: sha512-hDgy4ipTqXieT8YG8Mr917Y+FD/f11VK1GefZ5CwTDCuNqS/oTwjJ5l/DZkicThgS8hQW/Y7wPylPBMBJ8BkUg==}
@@ -6530,6 +6554,12 @@ packages:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
 snapshots:
+
+  '@a2a-js/sdk@1.2.0(express@5.2.1)':
+    dependencies:
+      jose: 6.2.12
+    optionalDependencies:
+      express: 5.2.1
 
   '@ag-ui/core@0.0.59':
     dependencies:

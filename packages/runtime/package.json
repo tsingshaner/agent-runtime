@@ -1,12 +1,13 @@
 {
   "dependencies": {
+    "@a2a-js/sdk": "1.2.0",
     "@ag-ui/core": "catalog:",
     "@electric-sql/pglite": "0.5.8",
-    "drizzle-orm": "1.0.0-rc.4",
     "@modelcontextprotocol/sdk": "catalog:",
     "@qingshaner/knowledge": "workspace:*",
-    "@qingshaner/skill": "workspace:*",
     "@qingshaner/mcp": "workspace:*",
+    "@qingshaner/skill": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.4",
     "zod": "catalog:"
   },
   "description": "Agent runtime core",

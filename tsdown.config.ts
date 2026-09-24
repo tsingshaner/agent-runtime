@@ -25,6 +25,7 @@ export default defineConfig(
       alwaysBundle: ['@internal/shared'],
       neverBundle: [
         '@ag-ui/core',
+        /^@a2a-js\/sdk/,
         /^@orpc\//,
         '@electric-sql/pglite',
         '@logtape/logtape',

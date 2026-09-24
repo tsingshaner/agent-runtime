@@ -1,3 +1,4 @@
+export { createA2AHandler } from './a2a'
 export { parseEvent, startedEvent, terminalEvent } from './ag-ui'
 export { RuntimeError } from './errors'
 export { RuntimeManager } from './manager'

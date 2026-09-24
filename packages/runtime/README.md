@@ -127,3 +127,9 @@ tool approvals, and existing-session changes after native reload. Initial runs
 exposed empty-session restart loss and declined MCP confirmations; both were
 fixed before the successful run. Only managed empty-form confirmations map to
 tool approvals; other elicitation forms remain unsupported and declined.
+
+## A2A server adapter
+
+`createA2AHandler(manager, origin, shutdownSignal?)` exposes Fetch routes for an A2A 1.0 Agent Card and JSON-RPC. The host must authenticate and validate Host/Origin before invoking it; the local server already does this. Execution uses the same Manager rather than a second agent loop.
+
+`manager.startTask(sessionId, input)` atomically creates an independent Task identity with its Run; `manager.getTask(taskId)` returns a consistent internal snapshot of the Run, accumulated text and pending interactions. Task output is retained independently of AG-UI event cleanup. The A2A adapter converts that snapshot to protocol types; details and runnable client usage are in [the A2A example](../../examples/a2a/README.md).

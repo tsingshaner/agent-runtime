@@ -172,3 +172,13 @@ export const memoryWrites = pgTable('memory_writes', {
   status: text().$type<MemoryWrite['status']>().notNull(),
   user: text().notNull()
 })
+
+/** A2A identity and output survive AG-UI history cleanup; lifecycle stays on Run. */
+export const tasks = pgTable('tasks', {
+  id: text().primaryKey(),
+  runId: text('run_id')
+    .notNull()
+    .unique()
+    .references(() => runs.id),
+  texts: jsonb().$type<Record<string, string>>().notNull().default({})
+})

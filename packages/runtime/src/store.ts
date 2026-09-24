@@ -15,7 +15,17 @@ import { parseEvent, startedEvent, type TerminalOutcome, terminalEvent } from '.
 import { RuntimeError } from './errors'
 import { acquireDirectoryLock, type DirectoryLock } from './lock'
 import * as schema from './schema'
-import { approvalBatches, approvals, events, inputRequests, memoryWrites, projects, runs, sessions } from './schema'
+import {
+  approvalBatches,
+  approvals,
+  events,
+  inputRequests,
+  memoryWrites,
+  projects,
+  runs,
+  sessions,
+  tasks
+} from './schema'
 import { subscribeToRun } from './subscription'
 import {
   ArchivedSchema,
@@ -222,6 +232,22 @@ const persistEvent = async (tx: Transaction, runId: string, event: AgUiEvent): P
     throw new RuntimeError('RUN_NOT_FOUND', `Run not found: ${runId}`)
   }
   await tx.insert(events).values({ event, runId, sequence: row.lastSequence })
+  if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
+    const [task] = await tx.select().from(tasks).where(eq(tasks.runId, runId))
+    if (task) {
+      // ponytail: rewrite accumulated text per delta; use chunk rows if large replies dominate writes.
+      await tx
+        .update(tasks)
+        .set({
+          texts: {
+            ...task.texts,
+            [event.messageId]:
+              (Object.hasOwn(task.texts, event.messageId) ? task.texts[event.messageId] : '') + event.delta
+          }
+        })
+        .where(eq(tasks.id, task.id))
+    }
+  }
   return { event, runId, sequence: row.lastSequence, sessionId: row.sessionId }
 }
 
@@ -518,7 +544,7 @@ export class SessionStore {
   /**
    * Atomically reserve the session's active run and persist its RUN_STARTED event.
    */
-  async beginRun(sessionId: string, runId: string, input?: RunInput): Promise<Run> {
+  async beginRun(sessionId: string, runId: string, input?: RunInput, taskId?: string): Promise<Run> {
     parseInput(SessionIdSchema, sessionId)
     parseInput(SessionIdSchema, runId)
     const run = await this.db.transaction(async (tx) => {
@@ -550,12 +576,37 @@ export class SessionStore {
       if (!inserted) {
         throw new RuntimeError('SESSION_BUSY', `Session has an active run: ${sessionId}`)
       }
+      if (taskId) {
+        await tx.insert(tasks).values({ id: taskId, runId })
+      }
       await persistEvent(tx, runId, startedEvent(sessionId, runId))
       await tx.update(sessions).set({ updatedAt: sql`now()` }).where(eq(sessions.id, sessionId))
       return requireRun(tx, runId)
     })
     this.#notifyRunChange(runId)
     return run
+  }
+
+  getTask(id: string, byRun = false) {
+    return this.db.transaction(async (tx) => {
+      const [task] = await tx
+        .select()
+        .from(tasks)
+        .where(eq(byRun ? tasks.runId : tasks.id, parseInput(SessionIdSchema, id)))
+      if (!task) {
+        throw new RuntimeError('TASK_NOT_FOUND', 'Task not found')
+      }
+      const run = await requireRun(tx, task.runId)
+      const pendingApprovals = await tx
+        .select()
+        .from(approvals)
+        .where(and(eq(approvals.runId, run.id), inArray(approvals.status, ['pending', 'decided', 'responding'])))
+      const pendingInputs = await tx
+        .select()
+        .from(inputRequests)
+        .where(and(eq(inputRequests.runId, run.id), inArray(inputRequests.status, ['pending', 'responding'])))
+      return { ...task, approvals: pendingApprovals, inputs: pendingInputs, run }
+    })
   }
 
   /**

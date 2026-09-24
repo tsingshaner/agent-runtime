@@ -85,3 +85,9 @@ OpenAPI, request limits and safe errors. `pnpm --filter @internal/server smoke:n
 checks the built Nitro process, token permissions, HTTP access, shutdown and restart
 without calling a model. Historical real-model results above do not verify this
 transport migration; real-model smoke must be explicitly rerun to claim that.
+
+## A2A
+
+The authenticated `/.well-known/agent-card.json` advertises A2A 1.0 JSON-RPC at `/a2a`, using the same Manager and bearer/Host/Origin checks as REST. The A2A routes are separate from the oRPC AG-UI event stream and are not included in `/spec.json`.
+
+Create a managed Session through REST, then send its ID as A2A `message.contextId`. Task IDs are independent of Run IDs and remain queryable after restart. See the [official-client example](../../examples/a2a/README.md) for submission, SSE snapshots, input/approval replies, cancellation, and the explicit no-model HTTP smoke command.

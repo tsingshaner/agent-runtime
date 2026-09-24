@@ -7,7 +7,7 @@ import { OpenAPIHandler } from '@orpc/openapi/fetch'
 import { COMMON_ERROR_STATUS_MAP, ORPCError } from '@orpc/server'
 import { RequestLimitHandlerPlugin } from '@orpc/server/plugins'
 import { ZodToJsonSchemaConverter } from '@orpc/zod'
-import { RuntimeManager } from '@qingshaner/runtime'
+import { createA2AHandler, RuntimeManager } from '@qingshaner/runtime'
 import { contract, EventSchemas } from '@qingshaner/runtime-contract'
 import * as z from 'zod/mini'
 import { zodToJsonSchema } from 'zod-to-json-schema'
@@ -81,6 +81,7 @@ export const createService = async (options: ServerOptions) => {
   const token = randomBytes(32).toString('hex')
   const expected = Buffer.from(`Bearer ${token}`)
   const shutdown = new AbortController()
+  const a2a = createA2AHandler(manager, options.origin, shutdown.signal)
   const origin = options.origin
   let closePromise: Promise<void> | undefined
   const close = () =>
@@ -107,7 +108,7 @@ export const createService = async (options: ServerOptions) => {
     }
     if (request.method === 'OPTIONS' && requestOrigin) {
       headers.set('access-control-allow-methods', 'GET, POST, PATCH, DELETE')
-      headers.set('access-control-allow-headers', 'Authorization, Content-Type, Last-Event-ID')
+      headers.set('access-control-allow-headers', 'Authorization, Content-Type, Last-Event-ID, A2A-Version')
       return new Response(null, { headers, status: 204 })
     }
     const authorization = Buffer.from(request.headers.get('authorization') ?? '')
@@ -133,9 +134,10 @@ export const createService = async (options: ServerOptions) => {
         throw new ORPCError('BAD_REQUEST')
       }
       const response =
-        request.method === 'GET' && url.pathname === '/spec.json'
+        (await a2a(request)) ??
+        (request.method === 'GET' && url.pathname === '/spec.json'
           ? Response.json(await specification())
-          : (await handler.handle(request, { context: { manager, options, shutdown: shutdown.signal } })).response
+          : (await handler.handle(request, { context: { manager, options, shutdown: shutdown.signal } })).response)
       if (!response) {
         throw new ORPCError('NOT_FOUND')
       }

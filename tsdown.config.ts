@@ -11,7 +11,8 @@ const packages = [
   ['skill', '@qingshaner/skill'],
   ['mcp', '@qingshaner/mcp'],
   ['shared', '@internal/shared'],
-  ['runtime-codex', '@qingshaner/runtime-codex']
+  ['runtime-codex', '@qingshaner/runtime-codex'],
+  ['runtime-deepagents', '@qingshaner/runtime-deepagents']
 ] as const
 const alias = Object.fromEntries(
   packages.map(([directory, name]) => [name, resolve(ROOT, 'packages', directory, 'src')])
@@ -25,6 +26,9 @@ export default defineConfig(
       alwaysBundle: ['@internal/shared'],
       neverBundle: [
         '@ag-ui/core',
+        /^@langchain\//,
+        'deepagents',
+        'langchain',
         /^@a2a-js\/sdk/,
         /^@orpc\//,
         '@electric-sql/pglite',

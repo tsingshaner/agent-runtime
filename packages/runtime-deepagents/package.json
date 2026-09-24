@@ -1,0 +1,51 @@
+{
+  "author": {
+    "name": "qingshaner",
+    "url": "https://github.com/Jon-a-than"
+  },
+  "bugs": {
+    "url": "https://github.com/tsingshaner/agent-runtime/issues"
+  },
+  "dependencies": {
+    "@ag-ui/core": "catalog:",
+    "@langchain/core": "1.2.11",
+    "@langchain/langgraph": "1.4.15",
+    "@langchain/langgraph-checkpoint-sqlite": "1.0.4",
+    "@langchain/openai": "1.5.13",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "@qingshaner/runtime": "workspace:*",
+    "deepagents": "1.13.5",
+    "langchain": "1.5.11",
+    "zod": "catalog:"
+  },
+  "description": "Deep Agents runtime with persistent native checkpoints",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=12.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "homepage": "https://github.com/tsingshaner/agent-runtime#readme",
+  "license": "ISC",
+  "main": "dist/index.mjs",
+  "name": "@qingshaner/runtime-deepagents",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tsingshaner/agent-runtime.git"
+  },
+  "type": "module",
+  "types": "dist/index.d.mts",
+  "version": "0.0.0"
+}

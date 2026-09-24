@@ -8,10 +8,13 @@ import { Skills } from '@qingshaner/skill'
 import { expect, test, vi } from 'vitest'
 
 import { ManualAdapter } from '../test/manual-adapter'
+import { setupMemoryDatabase } from '../test/memory-database.fixture'
 import { RuntimeManager } from './manager'
 import { ProjectResources } from './resources'
 
 import type { ResourceSnapshot } from './resources'
+
+setupMemoryDatabase()
 
 test('assembles only project enabled resources and reads complete current knowledge through MCP', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'runtime-resources-'))

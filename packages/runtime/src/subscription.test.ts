@@ -6,11 +6,14 @@ import { EventType } from '@ag-ui/core'
 import { sql } from 'drizzle-orm'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
+import { setupMemoryDatabase } from '../test/memory-database.fixture'
 import { RuntimeError } from './errors'
 import { SessionStore } from './store'
 import { subscribeToRun } from './subscription'
 
 import type { EventEnvelope } from './types'
+
+setupMemoryDatabase()
 
 describe('run subscriptions', () => {
   let dir: string

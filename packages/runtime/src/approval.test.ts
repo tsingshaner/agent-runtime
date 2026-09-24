@@ -5,11 +5,14 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import { ManualAdapter } from '../test/manual-adapter'
+import { setupMemoryDatabase } from '../test/memory-database.fixture'
 import { RuntimeError } from './errors'
 import { RuntimeManager } from './manager'
 import { SessionStore } from './store'
 
 describe('recoverable approvals and cancellation', () => {
+  setupMemoryDatabase()
+
   let dir: string
   let manager: RuntimeManager
   let adapter: ManualAdapter

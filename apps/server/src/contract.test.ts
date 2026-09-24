@@ -6,7 +6,10 @@ import { describe, expect, test } from 'vitest'
 import * as z from 'zod/mini'
 
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
+import { setupMemoryDatabase } from '../../../packages/runtime/test/memory-database.fixture'
 import { openTestService } from '../test/service.fixture'
+
+setupMemoryDatabase()
 
 describe('HTTP contract', () => {
   test('serves authenticated OpenAPI with concrete resource and event schemas', async () => {

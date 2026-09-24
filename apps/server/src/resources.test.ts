@@ -10,7 +10,10 @@ import { Skills } from '@qingshaner/skill'
 import { expect, test } from 'vitest'
 
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
+import { setupMemoryDatabase } from '../../../packages/runtime/test/memory-database.fixture'
 import { openTestService } from '../test/service.fixture'
+
+setupMemoryDatabase()
 
 test('manages resources behind authentication, preserves imports and exposes safe memory failures', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'http-resources-'))

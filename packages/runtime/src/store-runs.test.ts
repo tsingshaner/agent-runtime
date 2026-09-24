@@ -6,8 +6,11 @@ import { EventType } from '@ag-ui/core'
 import { eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
+import { setupMemoryDatabase } from '../test/memory-database.fixture'
 import { approvals, events, runs } from './schema'
 import { SessionStore } from './store'
+
+setupMemoryDatabase()
 
 describe('SessionStore runs', () => {
   let dir: string

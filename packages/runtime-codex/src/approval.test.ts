@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 
 import type { AdapterNotice, RuntimeAdapter } from '@qingshaner/runtime'
 
+import { setupMemoryDatabase } from '../../runtime/test/memory-database.fixture'
 import { closePeers, done, input, peer, turn } from '../test/runtime-peer'
 
 const request = (id: string | number, extra = {}) => ({
@@ -16,6 +17,8 @@ const request = (id: string | number, extra = {}) => ({
 })
 
 afterEach(closePeers)
+
+setupMemoryDatabase()
 
 describe('Codex approvals', () => {
   test.each(['commandExecution', 'fileChange'])(

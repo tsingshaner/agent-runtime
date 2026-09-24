@@ -7,6 +7,7 @@ import { sql } from 'drizzle-orm'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import { ManualAdapter } from '../test/manual-adapter'
+import { setupMemoryDatabase } from '../test/memory-database.fixture'
 import { RuntimeError } from './errors'
 import { acquireDirectoryLock } from './lock'
 import { RuntimeManager } from './manager'
@@ -23,6 +24,8 @@ const collect = async (events: AsyncIterable<EventEnvelope>): Promise<EventEnvel
 }
 
 describe('RuntimeManager operations', () => {
+  setupMemoryDatabase()
+
   let dir: string
   let adapter: ManualAdapter
   let manager: RuntimeManager

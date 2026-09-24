@@ -6,10 +6,13 @@ import { afterEach, expect, test } from 'vitest'
 import * as z from 'zod/mini'
 
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
+import { setupMemoryDatabase } from '../../../packages/runtime/test/memory-database.fixture'
 import { openTestService } from '../test/service.fixture'
 
 let cleanup = async () => {}
 afterEach(async () => cleanup())
+
+setupMemoryDatabase()
 
 test('authenticates HTTP clients and replays durable SSE without resubmitting a run', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'runtime-http-'))

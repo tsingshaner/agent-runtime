@@ -1,12 +1,15 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
+import { setupMemoryDatabase } from '../test/memory-database.fixture'
 import { runs, sessions } from './schema'
 import { SessionStore } from './store'
+
+setupMemoryDatabase()
 
 describe('SessionStore sessions', () => {
   let dir: string
@@ -27,6 +30,13 @@ describe('SessionStore sessions', () => {
   afterAll(async () => {
     await store.close()
     await rm(dir, { force: true, recursive: true })
+  })
+
+  test('keeps the test database in memory', async () => {
+    await store.insertSession(session('in-memory'))
+
+    expect(await store.getSession('in-memory')).toMatchObject({ id: 'in-memory' })
+    expect(await readdir(dir)).not.toContain('pgdata')
   })
 
   test('filters sessions and omits archived sessions by default', async () => {

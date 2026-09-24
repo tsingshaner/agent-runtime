@@ -6,7 +6,7 @@
   },
   "overrides": [
     {
-      "includes": ["**/*.test.ts", "**/*.bench.ts"],
+      "includes": ["**/*.test.ts", "**/*.bench.ts", "**/*.fixture.ts"],
       "linter": {
         "rules": {
           "correctness": {

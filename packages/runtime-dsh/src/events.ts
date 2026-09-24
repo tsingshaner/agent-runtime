@@ -11,6 +11,7 @@ export type Frame =
   | { kind: 'session'; event: SessionEvent }
   | { kind: 'stream'; frame: AssistantStreamFrame }
   | { kind: 'idle' }
+  | { kind: 'notice'; notice: AdapterNotice }
 export async function* readFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<Frame> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
@@ -50,6 +51,9 @@ export class Projection {
   ) {}
   accept = async (frame: Frame) => {
     switch (frame.kind) {
+      case 'notice':
+        await this.emit(frame.notice)
+        return
       case 'idle':
         this.idle = true
         return
@@ -132,7 +136,7 @@ export class Projection {
           event.data.reason.kind === 'completed'
             ? { status: 'succeeded' }
             : event.data.reason.kind === 'aborted'
-              ? { status: 'cancelled' }
+              ? { status: event.data.reason.reason.kind === 'user' ? 'cancelled' : 'interrupted' }
               : {
                   error: { code: 'DSH_TURN_FAILED', message: `DSH turn ended: ${event.data.reason.kind}` },
                   status: 'failed'

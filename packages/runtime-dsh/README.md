@@ -27,3 +27,16 @@ This verifies native bash execution and tool results, streaming, clean process
 exit followed by persistent continuation, provider-error sanitization, and
 missing-history rejection. Hosted model verification is separately recorded;
 a local model HTTP fixture is not evidence of hosted-model acceptance.
+
+Native tool calls wait at the official pre-execute waterfall for a Manager
+approval; denial happens before the tool body. `ask_user_question` uses the
+native user-question service and remains a separate input request. Plan-review
+intents are rejected rather than translated into generic input authorization.
+Control disconnect aborts pending interactions. Replies are never retried.
+Cancellation first requests native cancellation and waits for confirmed idle;
+timeout closes only the target session process and records `interrupted`.
+
+`control.test.ts` verifies denial/no side effects, native input, cancellation
+isolation, SIGKILL interruption, and SIGSTOP cancellation fallback using real
+owned Harness processes. `native-control.test.ts` verifies bearer rejection,
+channel disconnect and process release. All use a local model fixture.

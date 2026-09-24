@@ -22,8 +22,10 @@ const readBody = async (request: IncomingMessage) => {
   return JSON.parse(Buffer.concat(chunks).toString())
 }
 
+import { interactions } from './interactions.ts'
+
 export const name = 'managed-runtime-control'
-export const inject = ['agents', 'sessions']
+export const inject = ['agents', 'sessions', 'tools', 'userQuestions']
 export const apply = async (ctx: Context) => {
   const token = process.env.RUNTIME_DSH_TOKEN
   const addressFile = process.env.RUNTIME_DSH_ADDRESS
@@ -45,6 +47,7 @@ export const apply = async (ctx: Context) => {
     }
     stream.write(`${JSON.stringify(frame)}\n`)
   }
+  const respond = interactions(ctx, id, (notice) => send({ kind: 'notice', notice }))
   ctx.on('session/event', (session, event) => {
     if (session.id === id) {
       send({ event, kind: 'session' })
@@ -80,7 +83,11 @@ export const apply = async (ctx: Context) => {
     response.end()
     return
   }
-  const operate = async (path: string | undefined, body: { text?: unknown }, response: ServerResponse) => {
+  const operate = async (
+    path: string | undefined,
+    body: { text?: unknown; id?: unknown; decision?: unknown; answers?: unknown },
+    response: ServerResponse
+  ) => {
     switch (path) {
       case '/create':
       case '/resume': {
@@ -108,6 +115,10 @@ export const apply = async (ctx: Context) => {
       }
       case '/run':
         await run(body, response)
+        return
+      case '/respond':
+        respond(body)
+        response.end('{}')
         return
       case '/cancel':
         if (!owned) {

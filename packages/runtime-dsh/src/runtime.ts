@@ -11,6 +11,7 @@ import type {
   AdapterNotice,
   AdapterOutcome,
   ApprovalDecision,
+  InputAnswers,
   NativeSession,
   RuntimeAdapter
 } from '@qingshaner/runtime'
@@ -24,7 +25,15 @@ export interface DshRuntimeOptions {
   controlTimeoutMs?: number
 }
 export type DshSessionOptions = Record<string, never>
-type Child = { harness: DeepSeekHarness; url: string; token: string; session: NativeSession; directory: string }
+type Child = {
+  harness: DeepSeekHarness
+  url: string
+  token: string
+  session: NativeSession
+  directory: string
+  done?: Promise<void>
+  abort?: AbortController
+}
 
 export class DshRuntime implements RuntimeAdapter {
   readonly kind = 'dsh'
@@ -117,7 +126,13 @@ export class DshRuntime implements RuntimeAdapter {
           },
           id: 'llm-deepseek'
         },
-        { insert: [{ id: 'runtime-control', name: fileURLToPath(new URL(source, import.meta.url)) }] }
+        {
+          insert: [
+            { id: 'user-questions', name: '@deepseek-ai/dsh-user-questions' },
+            { id: 'ask-user', name: '@deepseek-ai/dsh-tool-ask-user' },
+            { id: 'runtime-control', name: fileURLToPath(new URL(source, import.meta.url)) }
+          ]
+        }
       ]),
       { mode: 0o600 }
     )
@@ -189,6 +204,11 @@ export class DshRuntime implements RuntimeAdapter {
   ): Promise<AdapterOutcome> => {
     const child = await this.#load(session, false)
     this.#active.set(input.runId, child)
+    let finish = () => {}
+    child.done = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    child.abort = new AbortController()
     const projection = new Projection(input.runId, emit)
     try {
       await writeFile(join(child.directory, 'active'), input.runId, { mode: 0o600 })
@@ -196,7 +216,8 @@ export class DshRuntime implements RuntimeAdapter {
         body: JSON.stringify({ text: input.context ? `${input.context}\n\n${input.text}` : input.text }),
         headers: { authorization: `Bearer ${child.token}`, 'content-type': 'application/json' },
         method: 'POST',
-        redirect: 'error'
+        redirect: 'error',
+        signal: child.abort.signal
       })
       if (!(response.ok && response.body)) {
         throw new RuntimeError('DSH_PROTOCOL_ERROR', 'DSH run rejected')
@@ -212,26 +233,56 @@ export class DshRuntime implements RuntimeAdapter {
     } catch {
       await child.harness.close()
       this.#children.delete(session.nativeSessionId)
-      throw new RuntimeError(
-        'DSH_EXECUTION_LOST',
-        'DSH execution lost; native history retained and unsafe resume blocked'
-      )
+      return {
+        error: {
+          code: 'DSH_EXECUTION_LOST',
+          message: 'DSH execution lost; native history retained and unsafe resume blocked'
+        },
+        status: 'interrupted'
+      }
     } finally {
+      finish()
       this.#active.delete(input.runId)
     }
   }
   cancel = async (runId: string): Promise<void> => {
     const child = this.#active.get(runId)
-    if (child) {
+    if (!child) {
+      return
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
       await this.#call(child, '/cancel', {})
+      await Promise.race([
+        child.done,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('Cancel not confirmed')), this.options.controlTimeoutMs ?? 10000)
+        })
+      ])
+    } catch {
+      child.abort?.abort()
+      await child.harness.close()
+    } finally {
+      clearTimeout(timeout)
     }
   }
   respondApproval = async (
-    _runId: string,
-    _nativeRequestId: string | number,
-    _decision: ApprovalDecision
+    runId: string,
+    nativeRequestId: string | number,
+    decision: ApprovalDecision
   ): Promise<void> => {
-    throw new RuntimeError('APPROVAL_NOT_FOUND', 'No DSH approval pending')
+    const child = this.#active.get(runId)
+    if (!child) {
+      throw new RuntimeError('APPROVAL_NOT_FOUND', 'No DSH approval pending')
+    }
+    await this.#call(child, '/respond', { decision, id: nativeRequestId })
+  }
+  respondInput = async (runId: string, nativeRequestId: string | number, answers: InputAnswers): Promise<void> => {
+    const child = this.#active.get(runId)
+    if (!child) {
+      throw new RuntimeError('INPUT_NOT_FOUND', 'No DSH input pending')
+    }
+    await this.#call(child, '/respond', { answers, id: nativeRequestId })
   }
   dispose = (): Promise<void> => {
     this.#disposed = true

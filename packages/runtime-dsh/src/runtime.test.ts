@@ -59,6 +59,14 @@ describe('DSH through Manager', () => {
       })
       expect(requests).toHaveLength(0)
       const first = await manager.run(session.id, { text: 'Remember marker-one' })
+      await expect
+        .poll(async () => (await manager.getRun(first.runId)).status, { timeout: 5000 })
+        .toBe('waiting_approval')
+      const approval = (await manager.listPendingApprovals(first.runId))[0]
+      if (!approval) {
+        throw new Error('No approval')
+      }
+      await manager.respondApproval(first.runId, approval.id, 'approve')
       const events = await Array.fromAsync(manager.subscribe(first.runId))
       expect((await manager.getRun(first.runId)).status).toBe('succeeded')
       expect(

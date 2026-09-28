@@ -71,8 +71,12 @@ try {
     assert(!html.includes(dev.token))
     const response = await fetch(`${dev.url}/spec.json`)
     assert.equal(response.status, 200)
-    assert.match(await response.text(), /subscribeRunEvents/)
+    const spec = await response.json()
+    assert.match(JSON.stringify(spec), /subscribeRunEvents/)
+    assert(spec && typeof spec === 'object' && 'security' in spec)
+    assert.deepEqual(spec.security, [{ bearerAuth: [] }])
     assert.equal((await fetch(`${dev.url}/health`)).status, 401)
+    assert.equal((await fetch(`${dev.url}/health`, { headers: dev.headers })).status, 200)
     assert.equal((await fetch(`${dev.url}/spec.json`, { method: 'POST' })).status, 401)
   } finally {
     await dev.close()

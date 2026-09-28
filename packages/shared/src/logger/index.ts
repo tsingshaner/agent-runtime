@@ -1,7 +1,7 @@
 import { getLogger as $getLogger } from '@logtape/logtape'
 import { toArray } from '@qingshaner/utility'
 
-type Category = 'codex' | 'dsh' | 'deepagents' | 'runtime'
+type Category = 'api' | 'codex' | 'dsh' | 'deepagents' | 'runtime' | (string & {})
 
 /**
  * Get a logger scoped to the application and optional runtime categories.
@@ -10,3 +10,5 @@ type Category = 'codex' | 'dsh' | 'deepagents' | 'runtime'
  */
 export const getLogger = (category?: Category | Category[]) =>
   $getLogger(category ? ['app', ...toArray<Category>(category)] : 'app')
+
+export const logger = getLogger()

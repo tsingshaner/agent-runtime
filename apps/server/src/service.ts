@@ -10,6 +10,7 @@ import { createA2AHandler, RuntimeManager } from '@qingshaner/runtime'
 import * as z from 'zod/mini'
 
 import { safeError } from './error.ts'
+import { onShutdown } from './infra/shutdown.ts'
 import { createAuthorization } from './middlewares/auth.ts'
 import { router, type ServiceOptions } from './router/index.ts'
 import { specification } from './spec.ts'
@@ -60,15 +61,17 @@ export const createService = async (options: ServerOptions) => {
   const shutdown = new AbortController()
   const a2a = createA2AHandler(manager, options.origin, shutdown.signal)
   let closePromise: Promise<void> | undefined
-  const close = () =>
-    (closePromise ??= (async () => {
-      shutdown.abort()
-      try {
-        await manager.dispose()
-      } finally {
-        await options.memoryCore?.dispose()
-      }
-    })())
+  onShutdown(
+    () =>
+      (closePromise ??= (async () => {
+        shutdown.abort()
+        try {
+          await manager.dispose()
+        } finally {
+          await options.memoryCore?.dispose()
+        }
+      })())
+  )
   const fetchRequest = async (request: Request): Promise<Response> => {
     const headers = new Headers({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
     try {
@@ -106,7 +109,6 @@ export const createService = async (options: ServerOptions) => {
     }
   }
   return {
-    close,
     fetch: fetchRequest,
     token
   }

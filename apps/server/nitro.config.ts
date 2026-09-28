@@ -39,6 +39,11 @@ export default defineConfig({
       '@electric-sql/pglite'
     ]
   },
+  runtimeConfig: {
+    runtime: {
+      dataDir: process.env.NITRO_RUNTIME_DATA_DIR
+    }
+  },
   serverDir: './src',
   serverEntry: './src/index.ts',
   // Preserve package-relative database assets, DSH plugins and native SQLite bindings.

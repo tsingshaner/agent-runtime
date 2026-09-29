@@ -76,7 +76,7 @@ const readConfig = async () => {
     throw error
   }
 
-  result.data.runtime.dataDir = resolve(result.data.runtime.dataDir)
+  result.data.runtime.dataDir = resolve(process.env.RUNTIME_DATA_DIR ?? result.data.runtime.dataDir)
 
   logger.info('Config loaded successfully', { config: result.data })
 

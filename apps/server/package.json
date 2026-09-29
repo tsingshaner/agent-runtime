@@ -7,7 +7,7 @@
     "smoke": "pnpm --workspace-root build && pnpm build && node smoke.ts",
     "smoke:runtimes": "pnpm --workspace-root build && pnpm build && node --env-file-if-exists=../../.env.local multi-runtime-smoke.ts",
     "smoke:resources": "pnpm --workspace-root build && pnpm build && node --env-file-if-exists=../../.env.local resources-smoke.ts",
-    "build": "nitro build",
+    "build": "pnpm --filter @internal/web build && nitro build",
     "smoke:nitro": "pnpm --workspace-root build && pnpm build && node nitro-smoke.ts"
   },
   "dependencies": {
@@ -25,6 +25,7 @@
     "@qingshaner/runtime-deepagents": "workspace:*",
     "@qingshaner/runtime-dsh": "workspace:*",
     "@qingshaner/skill": "workspace:*",
+    "better-auth": "^1.7.6",
     "c12": "4.0.0-rc.2",
     "nitro": "3.0.260903-beta",
     "zod": "catalog:",

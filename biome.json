@@ -2,7 +2,12 @@
   "$schema": "node_modules/@biomejs/biome/configuration_schema.json",
   "extends": ["@qingshaner/devtools/biome"],
   "files": {
-    "includes": ["**", "!!packages/runtime-codex/src/schemas", "!!packages/**/drizzle"]
+    "includes": [
+      "**",
+      "!!packages/runtime-codex/src/schemas",
+      "!!packages/**/drizzle",
+      "!!apps/web/src/routeTree.gen.ts"
+    ]
   },
   "overrides": [
     {
@@ -23,6 +28,21 @@
         "enabled": false
       },
       "includes": ["**/package.json"]
+    },
+    {
+      "css": {
+        "parser": {
+          "tailwindDirectives": true
+        }
+      },
+      "includes": ["apps/web/**"],
+      "linter": {
+        "rules": {
+          "nursery": {
+            "noUndeclaredClasses": "off"
+          }
+        }
+      }
     }
   ]
 }

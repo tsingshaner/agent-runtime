@@ -135,3 +135,19 @@ checks native history using public HTTP APIs. Credentials come from the environm
 Without explicit opt-in it prints SKIPPED. Input/approval/cancellation over HTTP
 are covered separately by the [native protocol smoke](../../examples/a2a/README.md).
 See the [acceptance matrix](../../docs/runtime-acceptance.md) for versions and limits.
+
+## Browser workbench
+
+The server build includes the Web application. `/`, `/login`, and `/workspace`
+serve its public shell; business data and event subscriptions remain authenticated.
+See the [Web setup and HTTPS guide](../web/README.md).
+Set `RUNTIME_PUBLIC_ORIGIN` for an explicit public HTTP/HTTPS origin and preserve
+Host/Origin through the reverse proxy. Forwarded headers do not grant trust.
+
+Better Auth handles browser sessions with a small access-token sign-in plugin:
+`POST /auth/sign-in/token`, `GET /auth/get-session`, `POST /auth/sign-out`.
+These authentication endpoints use Better Auth's client protocol, separately from
+the business oRPC contract. Other Better Auth endpoints are not exposed.
+Cookie sessions have a fixed seven-day lifetime, are revoked by sign-out, and
+are process-local so restarting invalidates them. The generated server token still
+works for existing Bearer clients. Browser responses do not expose session tokens.

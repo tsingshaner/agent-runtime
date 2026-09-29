@@ -2,8 +2,8 @@ import { cleanup } from '../src/infra/shutdown'
 import { createService, type ServerOptions } from '../src/service'
 
 /** Exercise the production Fetch boundary without owning an HTTP listener. */
-export const openTestService = async (options: Omit<ServerOptions, 'origin'>) => {
-  const url = 'http://127.0.0.1:4310'
+export const openTestService = async (options: Omit<ServerOptions, 'origin'> & { origin?: string }) => {
+  const url = options.origin ?? 'http://127.0.0.1:4310'
   const service = await createService({ ...options, origin: url })
   const fetchRequest: typeof fetch = (input, init) => {
     const request = new Request(input, init)

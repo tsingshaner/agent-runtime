@@ -14,6 +14,45 @@ try {
   const first = await launchNitro(directory)
   try {
     assert.equal((await stat(join(directory, 'http-token'))).mode & 0o777, 0o600)
+    for (const path of ['/', '/login', '/workspace', '/workspace/history']) {
+      const page = await fetch(`${first.url}${path}`)
+      assert.equal(page.status, 200)
+      assert.match(page.headers.get('content-type') ?? '', /text\/html/)
+      const html = await page.text()
+      assert.match(html, /<html lang="zh-CN">/)
+      assert(!html.includes(first.token))
+      const asset = html.match(/src="([^" ]+\.js)"/)?.[1]
+      assert(asset)
+      assert.equal((await fetch(`${first.url}${asset}`)).status, 200)
+    }
+    const login = await fetch(`${first.url}/auth/sign-in/token`, {
+      body: JSON.stringify({ token: first.token }),
+      headers: { 'content-type': 'application/json', origin: first.url },
+      method: 'POST'
+    })
+    assert.equal(login.status, 200)
+    const cookie = login.headers.get('set-cookie')?.split(';')[0]
+    assert(cookie)
+    assert.equal((await fetch(`${first.url}/health`, { headers: { cookie } })).status, 200)
+    const browserSession = await fetch(`${first.url}/auth/get-session`, { headers: { cookie } })
+    assert.equal(browserSession.status, 200)
+    const identity = await browserSession.json()
+    assert(identity.session && !('token' in identity.session))
+    assert.equal(
+      (await fetch(`${first.url}/auth/sign-up/email`, { headers: { origin: first.url }, method: 'POST' })).status,
+      404
+    )
+    assert.equal(
+      (
+        await fetch(`${first.url}/auth/sign-out`, {
+          body: '{}',
+          headers: { 'content-type': 'application/json', cookie, origin: first.url },
+          method: 'POST'
+        })
+      ).status,
+      200
+    )
+    assert.equal((await fetch(`${first.url}/health`, { headers: { cookie } })).status, 401)
     assert.equal((await fetch(`${first.url}/spec.json`)).status, 401)
     assert.equal((await fetch(`${first.url}/openapi.html`, { headers: first.headers })).status, 404)
     assert.equal((await fetch(`${first.url}/spec.json`, { headers: first.headers })).status, 200)

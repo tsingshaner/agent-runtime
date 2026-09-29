@@ -46,7 +46,9 @@ const openConfiguredService = async () => {
             serviceId
           })
         : undefined,
-    origin: `http://127.0.0.1:${Number(process.env.NITRO_PORT ?? process.env.PORT ?? 4310)}`,
+    origin:
+      process.env.RUNTIME_PUBLIC_ORIGIN ??
+      `http://127.0.0.1:${Number(process.env.NITRO_PORT ?? process.env.PORT ?? 4310)}`,
     resources,
     runtimes: [
       new CodexRuntime({ dataDir: join(dataDir, 'codex') }),

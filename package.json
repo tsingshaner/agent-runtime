@@ -24,7 +24,7 @@
     "check": "biome check .",
     "check:fix": "biome check . --write",
     "check:cspell": "cspell . --no-summary --no-progress --gitignore",
-    "check:type": "tsc --noEmit -p .config/tsconfig.app.json && tsc --noEmit -p .config/tsconfig.node.json",
+    "check:type": "tsc --noEmit -p .config/tsconfig.app.json && tsc --noEmit -p .config/tsconfig.node.json && pnpm --filter @internal/web check:type",
     "check:knip": "knip",
     "prepare": "simple-git-hooks",
     "test": "vitest run",

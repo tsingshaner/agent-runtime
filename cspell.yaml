@@ -3,6 +3,7 @@
 import: '@qingshaner/devtools/cspell'
 
 ignorePaths:
+  - apps/web/src/routeTree.gen.ts
   - '**/*/drizzle/**'
   - packages/runtime-codex/src/schemas/**
   - .gitignore

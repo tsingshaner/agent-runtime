@@ -49,6 +49,10 @@ export const createService = async (options: ServerOptions) => {
     }),
     { origin: options.origin, origins: options.origins }
   )
+  const publicUrl = new URL(options.origin)
+  if (!['http:', 'https:'].includes(publicUrl.protocol) || publicUrl.origin !== options.origin) {
+    throw new Error('Invalid public origin')
+  }
   const manager = await RuntimeManager.open({
     dataDir: options.dataDir,
     memory: options.memory,
@@ -75,12 +79,12 @@ export const createService = async (options: ServerOptions) => {
   const fetchRequest = async (request: Request): Promise<Response> => {
     const headers = new Headers({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
     try {
-      const preflight = authorize(request, headers)
-      if (preflight) {
-        return preflight
-      }
       if (shutdown.signal.aborted) {
         throw new ORPCError('SERVICE_UNAVAILABLE')
+      }
+      const preflight = await authorize(request, headers)
+      if (preflight) {
+        return preflight
       }
       const url = new URL(request.url)
       try {

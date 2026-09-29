@@ -1,0 +1,53 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply m-0 bg-[#f5f5f0] font-sans text-stone-900 antialiased;
+  }
+  button,
+  input,
+  a {
+    @apply outline-offset-4 focus-visible:outline-2 focus-visible:outline-teal-700;
+  }
+  button {
+    @apply cursor-pointer disabled:cursor-wait disabled:opacity-60;
+  }
+}
+
+@layer components {
+  .login-layout {
+    background-image: radial-gradient(ellipse at top left, #dfebe5 0, transparent 55%);
+    @apply flex min-h-dvh items-center justify-center px-5 py-10;
+  }
+  .login-card {
+    @apply w-full max-w-[440px] rounded-3xl border border-white bg-white/90 p-7 shadow-[0_20px_80px_-35px_#244c3d40] sm:p-10;
+  }
+  .brand-mark {
+    @apply flex h-9 w-9 items-center justify-center rounded-xl bg-teal-800 text-xl font-semibold text-white;
+  }
+  .eyebrow {
+    @apply text-xs font-medium tracking-widest text-teal-800;
+  }
+  .token-input {
+    @apply block min-h-12 w-full rounded-lg border border-stone-300 bg-white px-4 text-sm placeholder:text-stone-400;
+  }
+  .primary-button {
+    @apply flex min-h-12 items-center justify-between gap-4 rounded-lg bg-teal-800 px-5 text-sm font-medium text-white transition-colors hover:bg-teal-900;
+  }
+  .text-button {
+    @apply inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-sm text-teal-800 hover:bg-teal-50;
+  }
+  .workspace-shell {
+    @apply min-h-dvh md:flex;
+  }
+  .workspace-sidebar {
+    @apply flex shrink-0 flex-col border-b border-stone-200 bg-[#eeefe8] p-6 md:min-h-dvh md:w-60 md:border-r md:border-b-0;
+  }
+  .nav-current {
+    @apply flex min-h-11 items-center justify-between rounded-lg bg-white px-3 text-sm font-medium text-teal-900;
+  }
+}

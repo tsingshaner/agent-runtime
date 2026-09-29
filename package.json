@@ -33,19 +33,19 @@
     "smoke:codex": "pnpm --filter @internal/sdk-example smoke"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.13",
-    "@changesets/cli": "^2.31.1",
+    "@biomejs/biome": "^2.5.14",
+    "@changesets/cli": "^3.0.3",
     "@qingshaner/devtools": "^0.0.3",
-    "@types/node": "^26.5.1",
-    "@vitest/coverage-v8": "^5.0.0",
-    "cspell": "^10.3.1",
+    "@types/node": "^26.6.3",
+    "@vitest/coverage-v8": "^5.0.2",
+    "cspell": "^10.3.5",
     "drizzle-kit": "catalog:",
-    "knip": "^6.35.1",
+    "knip": "^6.38.0",
     "nano-staged": "^1.0.2",
     "simple-git-hooks": "^2.14.0",
     "tsdown": "^0.23.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.2"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm nano-staged",

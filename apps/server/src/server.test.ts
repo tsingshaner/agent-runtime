@@ -111,7 +111,10 @@ test('authenticates HTTP clients and replays durable SSE without resubmitting a 
   const replay = await (await request(`/runs/${run.runId}/events?afterSequence=1`)).text()
   expect(replay).not.toContain('RUN_STARTED')
   expect(replay).toContain('RUN_ERROR')
-  expect(await (await request(`/runs/${run.runId}`)).json()).toMatchObject({ status: 'cancelled' })
+  expect(await (await request(`/runs/${run.runId}`)).json()).toMatchObject({
+    requestText: 'hello',
+    status: 'cancelled'
+  })
   expect((await request(`/runs/${run.runId}/events`, 'DELETE')).status).toBe(200)
   expect((await request(`/runs/${run.runId}/events`)).status).toBe(410)
   await server.close()
@@ -154,6 +157,9 @@ test('rejects malformed requests and keeps subscribers independent during shutdo
     await (await send(`/sessions/${session.id}/runs`, { text: 'wait' })).json()
   )
   await adapter.waitStarted(run.runId)
+  expect(await (await fetch(`${server.url}/runs/${run.runId}`, { headers })).json()).toMatchObject({
+    requestText: 'wait'
+  })
   const endpoint = `${server.url}/runs/${run.runId}/events`
   expect((await fetch(`${endpoint}?afterSequence=-1`, { headers })).status).toBe(400)
   expect((await fetch(endpoint, { headers: { ...headers, 'last-event-id': '999' } })).status).toBe(400)

@@ -31,6 +31,7 @@ const openConfiguredService = async () => {
   const serviceId = process.env.MEMORY_SERVICE_ID ?? 'agent-runtime'
   const server = await createService({
     dataDir,
+    defaultModel: process.env.CODEX_MODEL,
     memory: endpoint ? new ProjectMemory({ apiKeyEnv: 'MEMORY_API_KEY', endpoint, serviceId }) : undefined,
     memoryCore:
       process.env.MEMORY_MODEL && process.env.MEMORY_BASE_URL

@@ -3,7 +3,8 @@
 React、Vite、TanStack Router/Query、Base UI 与 Tailwind CSS 构建的中文入口。
 `src/routes/` 使用 TanStack 文件路由，Vite 插件自动生成 `src/routeTree.gen.ts`；生成文件随代码提交，不手工编辑。
 浏览器使用 Better Auth React client；业务 API 使用共享 oRPC 契约。
-当前入口提供登录、受保护工作台和退出；项目、聊天与资源页面由后续任务实现。
+当前入口提供登录、项目与会话导航、Codex 流式聊天、历史和归档、工具审批、补充输入及取消。
+资源管理页面由后续任务实现。
 
 ## 构建与启动
 
@@ -34,8 +35,7 @@ RUNTIME_PUBLIC_ORIGIN=http://127.0.0.1:5173 pnpm --filter @internal/server start
 pnpm --filter @internal/web dev
 ```
 
-打开 `http://127.0.0.1:5173`。Vite 将认证和健康检查请求转发到本机 4310，保留浏览器的 Host/Origin。
-后续业务页面需要在开发代理中增加对应 API 前缀。不要将开发服务器公开到公网。
+打开 `http://127.0.0.1:5173`。Vite 将认证、健康检查、项目、会话和运行请求转发到本机 4310，保留浏览器的 Host/Origin。不要将开发服务器公开到公网。
 
 ## 同源 HTTPS
 
@@ -70,3 +70,48 @@ HTTP 测试覆盖登录兑换、退出撤销、过期、重启、HTTPS Cookie、
 Nitro smoke 使用真实构建产物验证页面深链接、静态资源、认证及持久服务重启，不调用模型。
 浏览器手工检查：直接打开工作台跳转登录 → 错误令牌提示 → 正确登录 → 受保护服务连接 →
 刷新仍登录 → 退出 → 后退或直接打开工作台仍需登录；在 390px 宽度检查布局与键盘操作。
+
+## 项目与聊天
+
+创建项目时填写的是服务端已有目录，服务会校验并规范化路径；项目归属不是文件沙箱。
+项目和会话 ID 保存在 `/workspace?project=…&session=…`，刷新或直接访问恢复对应上下文。
+列表支持分页；会话侧栏可切换已归档列表，空闲会话可以归档和恢复。
+
+服务端 `CODEX_MODEL` 设置网页的默认模型，通过受保护的 `/health` 仅返回模型名称；
+未配置时网页要求手动填写。新会话固定 Codex、项目、模型及选定工作目录。
+模型认证仍使用服务端预先配置的 Codex 身份，不通过网页上传凭据。
+
+发送前将原 Request ID 和消息暂存于当前标签页的 sessionStorage，收到成功响应后清除。
+响应不确定时只允许“确认原请求”，使用相同标识与输入；刷新后仍保留这份确认上下文。
+会话忙时不排队，新会话可以独立运行。运行查询返回 `requestText` 用于历史恢复；
+旧数据未保留的输入显示为空，不猜测用户消息。
+
+事件订阅使用 OpenAPILink 和 TanStack StreamProcessor，断线按持久序号续订并去重，
+最多自动重试五次，仍失败时可手动重新连接。切换页面只关闭订阅，不取消运行。
+审批和补充输入从服务端查询；授权发送尝试会在当前标签页记住，响应不确定时不重发。
+批次逐项选择后由服务端收齐执行。取消请求成功后仍等待服务端的实际终态。
+Markdown 不执行原始 HTML，不渲染外部图片，链接经过安全转换；代码块支持复制。
+
+## 浏览器回归与真实冒烟
+
+```sh
+pnpm build
+pnpm --filter @internal/web exec playwright install chromium
+pnpm exec vitest run apps/web/test/workbench.test.ts
+```
+
+测试启动构建后的网页和真实 Fetch 服务、真实 PGlite，模型侧复用 ManualAdapter，
+覆盖目录校验、项目/会话隔离、刷新、手机导航、归档、请求响应丢失、断流重连、
+工具结果、混合审批批次、输入续接、取消确认和迟到回答。不调用外部模型。
+可使用 `PLAYWRIGHT_CHANNEL=chrome` 改用本机 Chrome。
+CI 使用 `playwright install --with-deps chromium` 安装浏览器和系统依赖。
+
+真实模型需显式启用（会消耗已配置的 Codex 额度）：
+
+```sh
+pnpm --filter @internal/server build
+RUN_REAL_CODEX=1 CODEX_MODEL=your-model pnpm --filter @internal/web smoke
+```
+
+真实冒烟从网页登录、创建项目/会话、发送文本并刷新验证历史。未启用时输出 UNVERIFIED；
+工具、审批与资源的真实模型行为仍按实际触发情况单独记录，受控测试不能替代该验证。

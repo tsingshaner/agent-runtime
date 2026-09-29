@@ -129,9 +129,8 @@ type Transaction = Parameters<Parameters<PgliteDatabase<typeof relations>['trans
  * Normalize persisted run timestamps to ISO strings.
  */
 const toRun = (row: typeof runs.$inferSelect): Run => {
-  const { requestText: _requestText, ...publicRun } = row
   return {
-    ...publicRun,
+    ...row,
     createdAt: new Date(row.createdAt).toISOString(),
     endedAt: row.endedAt === null ? null : new Date(row.endedAt).toISOString()
   }
@@ -564,7 +563,7 @@ export class SessionStore {
         .values({
           id: runId,
           requestId: input?.requestId,
-          requestText: input?.requestId === undefined ? undefined : input.text,
+          requestText: input?.text,
           sessionId,
           status: 'starting'
         })

@@ -10,6 +10,8 @@
   }
   button,
   input,
+  textarea,
+  select,
   a {
     @apply outline-offset-4 focus-visible:outline-2 focus-visible:outline-teal-700;
   }
@@ -49,5 +51,28 @@
   }
   .nav-current {
     @apply flex min-h-11 items-center justify-between rounded-lg bg-white px-3 text-sm font-medium text-teal-900;
+  }
+}
+
+@layer components {
+  .markdown p {
+    @apply my-3 leading-7;
+  }
+  .markdown ul {
+    @apply my-3 list-disc pl-6;
+  }
+  .markdown ol {
+    @apply my-3 list-decimal pl-6;
+  }
+  .markdown h1,
+  .markdown h2,
+  .markdown h3 {
+    @apply my-4 font-semibold text-xl;
+  }
+  .markdown a {
+    @apply text-teal-800 underline;
+  }
+  .markdown blockquote {
+    @apply border-l-2 border-stone-300 pl-4 text-stone-600;
   }
 }

@@ -14,4 +14,4 @@ export const health = base
       tags: ['Health']
     })
   )
-  .output(z.object({ status: z.literal('ready') }))
+  .output(z.object({ defaultModel: z.optional(z.string()), status: z.literal('ready') }))

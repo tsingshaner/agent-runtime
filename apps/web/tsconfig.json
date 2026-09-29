@@ -2,10 +2,10 @@
   "compilerOptions": {
     "composite": false,
     "jsx": "react-jsx",
-    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
     "types": ["vite/client", "node"]
   },
   "exclude": ["dist", "node_modules"],
   "extends": "../../.config/tsconfig.app.json",
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "test/**/*.ts", "smoke.ts"]
 }

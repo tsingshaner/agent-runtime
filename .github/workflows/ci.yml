@@ -28,5 +28,7 @@ jobs:
 
       - name: Read-only checks
         run: pnpm run '/^check/'
+      - name: Install test browser
+        run: pnpm --filter @internal/web exec playwright install --with-deps chromium
       - name: Tests and coverage
         run: pnpm test:cov

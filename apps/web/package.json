@@ -5,20 +5,24 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "check:type": "tsc --noEmit -p tsconfig.json"
+    "check:type": "tsc --noEmit -p tsconfig.json",
+    "smoke": "node --experimental-strip-types smoke.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
     "@orpc/client": "2.0.0-beta.36",
     "@orpc/openapi": "catalog:",
     "@qingshaner/runtime-contract": "workspace:*",
+    "@tanstack/ai-client": "0.32.0",
     "@tanstack/react-query": "^5.104.0",
     "@tanstack/react-router": "^1.170.40",
     "better-auth": "^1.7.6",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/router-plugin": "^1.168.41",
     "@types/react": "^19.3.0",

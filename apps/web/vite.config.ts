@@ -10,7 +10,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/auth': { changeOrigin: false, target: 'http://127.0.0.1:4310' },
-      '/health': { changeOrigin: false, target: 'http://127.0.0.1:4310' }
+      '/health': { changeOrigin: false, target: 'http://127.0.0.1:4310' },
+      '/projects': { changeOrigin: false, target: 'http://127.0.0.1:4310' },
+      '/runs': { changeOrigin: false, target: 'http://127.0.0.1:4310' },
+      '/sessions': { changeOrigin: false, target: 'http://127.0.0.1:4310' }
     },
     strictPort: true
   }

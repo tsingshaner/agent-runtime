@@ -10,6 +10,7 @@ import type { ManagerOptions, RuntimeManager } from '@qingshaner/runtime'
 import { safeError } from '../error.ts'
 
 export interface ServiceOptions extends ManagerOptions {
+  defaultModel?: string
   memoryCore?: MemoryCoreService
 }
 export interface ServiceContext {
@@ -48,7 +49,7 @@ const memory = (context: ServiceContext) =>
   need(context.options.memory instanceof ProjectMemory ? context.options.memory : undefined)
 
 export const router = implementer.router({
-  health: base.health.handler(() => ({ status: 'ready' })),
+  health: base.health.handler(({ context }) => ({ defaultModel: context.options.defaultModel, status: 'ready' })),
   knowledge: {
     bind: project.knowledge.bind.handler(({ context, input }) =>
       done(

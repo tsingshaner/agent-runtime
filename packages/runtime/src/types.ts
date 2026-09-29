@@ -111,6 +111,8 @@ export interface MemoryProvider {
 }
 
 export interface Run {
+  /** Original user input; null for runs created before input retention. */
+  requestText: string | null
   memoryError: RuntimeFault | null
   requestId: string | null
   id: string

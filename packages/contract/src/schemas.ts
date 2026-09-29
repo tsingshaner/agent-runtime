@@ -62,6 +62,7 @@ export const run = z.object({
   memoryError: z.nullable(fault),
   nativeTurnId: z.nullable(z.string()),
   requestId: z.nullable(z.string()),
+  requestText: z.nullable(z.string()),
   sessionId: text,
   status: z.enum([
     'starting',

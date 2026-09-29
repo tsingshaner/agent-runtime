@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { launchNitro } from '../../apps/server/test/nitro.fixture.ts'
+import { modelReply } from '../../packages/runtime-dsh/test/model.fixture.ts'
 
 /** Real Harness and tools, deterministic model responses; no hosted provider credentials. */
 const main = async () => {
@@ -31,32 +32,18 @@ const main = async () => {
       const last = data.messages.at(-1)
       assert.ok(last)
       const id = `fixture-${++requests}`
-      const answered = last.role === 'tool'
+      const answered = Array.isArray(last.content) && last.content.some((block) => block.type === 'tool_result')
       const question = JSON.stringify(last.content).includes('native-smoke:input')
-      const delta = answered
-        ? { content: `native-complete ${JSON.stringify(last.content)}`, role: 'assistant' }
+      const answer = answered
+        ? `native-complete ${JSON.stringify(last.content)}`
         : {
-            role: 'assistant',
-            tool_calls: [
-              {
-                function: {
-                  arguments: JSON.stringify(
-                    question
-                      ? { questions: [{ id: 'name', question: 'What is your name?' }] }
-                      : { command: 'printf a >> effects.txt' }
-                  ),
-                  name: question ? 'ask_user_question' : 'bash'
-                },
-                id,
-                index: 0,
-                type: 'function'
-              }
-            ]
+            arguments: question
+              ? { questions: [{ id: 'name', question: 'What is your name?' }] }
+              : { command: 'printf a >> effects.txt' },
+            name: question ? 'ask_user_question' : 'bash'
           }
-      const frame = (delta: unknown, finish_reason: string | null) =>
-        `data: ${JSON.stringify({ choices: [{ delta, finish_reason, index: 0 }], id, model: 'deepseek-v4-flash', object: 'chat.completion.chunk' })}\n\n`
       response.writeHead(200, { 'content-type': 'text/event-stream' })
-      response.end(`${frame(delta, null) + frame({}, answered ? 'stop' : 'tool_calls')}data: [DONE]\n\n`)
+      response.end(modelReply(answer, id))
     })().catch(() => {
       if (!response.headersSent) {
         response.writeHead(500)

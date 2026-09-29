@@ -127,20 +127,16 @@ export class Projection {
         await this.emit({ event: { toolCallId: event.data.callId, type: EventType.TOOL_CALL_END }, kind: 'event' })
         return
       case 'tool/result':
-        for (const block of event.data.message.content) {
-          if (block.type === 'tool-result') {
-            await this.emit({
-              event: {
-                content: JSON.stringify(block.content),
-                messageId: randomUUID(),
-                role: 'tool',
-                toolCallId: block.toolCallId,
-                type: EventType.TOOL_CALL_RESULT
-              },
-              kind: 'event'
-            })
-          }
-        }
+        await this.emit({
+          event: {
+            content: JSON.stringify(event.data.message.content),
+            messageId: randomUUID(),
+            role: 'tool',
+            toolCallId: event.data.message.toolCallId,
+            type: EventType.TOOL_CALL_RESULT
+          },
+          kind: 'event'
+        })
         return
       case 'turn/end':
         this.outcome = outcome(event.data.reason)

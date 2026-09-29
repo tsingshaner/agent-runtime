@@ -14,8 +14,10 @@ import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
 
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 
+import { modelReply } from '../../packages/runtime-dsh/test/model.fixture.ts'
+
 type Snapshot = { pid: number; header: SessionHeader; events: SessionEvent[]; messages: unknown[]; status: string }
-const version = '0.1.5-rc.2'
+const version = '0.2.0-rc.1'
 
 export async function probe(external = false) {
   if (external && !process.env.DEEPSEEK_API_KEY) {
@@ -43,9 +45,7 @@ export async function probe(external = false) {
     requests.push(parsed)
     const text = `fixture-response-${requests.length}`
     response.writeHead(200, { 'content-type': 'text/event-stream' })
-    response.end(
-      `data: ${JSON.stringify({ choices: [{ delta: { content: text, role: 'assistant' }, finish_reason: null, index: 0 }], created: 1, id: `fixture-${requests.length}`, model, object: 'chat.completion.chunk' })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop', index: 0 }], created: 1, id: `fixture-${requests.length}`, model, object: 'chat.completion.chunk', usage: { completion_tokens: 2, prompt_tokens: 10, total_tokens: 12 } })}\n\ndata: [DONE]\n\n`
-    )
+    response.end(modelReply(text, `fixture-${requests.length}`))
   })
   const processes: DeepSeekHarness[] = []
   try {

@@ -2,9 +2,14 @@
 # DSH runtime
 
 `DshRuntime({ dataDir, apiKeyEnv?: 'DEEPSEEK_API_KEY', baseURL? })` implements
-`RuntimeAdapter` using the official SDK/Harness pinned together at `0.1.5-rc.2`.
+`RuntimeAdapter` using the official SDK/Harness pinned together at `0.2.0-rc.1`.
 Register it with `RuntimeManager` and create a `runtime: 'dsh'` session with an
 explicit model. Import and construction perform no I/O.
+
+The 0.2 provider uses DeepSeek Messages (`/v1/messages`), not Chat Completions.
+A custom `baseURL` must support that protocol; deterministic fixtures emit Messages SSE.
+Cordis is aligned at 4.0.4. Upgrade the SDK, Harness and plugins together to avoid
+mixing tool schedulers and service/type registries across releases.
 
 Each session owns one lazy Harness process, isolated HOME/DSH home and bearer
 protected loopback control channel. The official `sdk-minimal` profile starts

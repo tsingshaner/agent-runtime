@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { RuntimeManager } from '@qingshaner/runtime'
 import { describe, expect, test, vi } from 'vitest'
 
+import { modelReply } from '../test/model.fixture'
 import { DshRuntime } from './index'
 
 describe('DSH through Manager', () => {
@@ -29,7 +30,10 @@ describe('DSH through Manager', () => {
       }
       response.writeHead(200, { 'content-type': 'text/event-stream' })
       response.end(
-        `data: ${JSON.stringify({ choices: [{ delta: requests.length === 1 ? { role: 'assistant', tool_calls: [{ function: { arguments: JSON.stringify({ command: 'printf tool-proof' }), name: 'bash' }, id: 'call-1', index: 0, type: 'function' }] } : { content: 'remembered', role: 'assistant' }, finish_reason: null, index: 0 }], id: 'fixture', model: 'deepseek-v4-flash', object: 'chat.completion.chunk' })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: requests.length === 1 ? 'tool_calls' : 'stop', index: 0 }], id: 'fixture', model: 'deepseek-v4-flash', object: 'chat.completion.chunk' })}\n\ndata: [DONE]\n\n`
+        modelReply(
+          requests.length === 1 ? { arguments: { command: 'printf tool-proof' }, name: 'bash' } : 'remembered',
+          'call-1'
+        )
       )
     })
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve))

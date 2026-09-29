@@ -96,10 +96,11 @@ describe('DSH project resources', () => {
       expect(http.calls()).toBe(2)
       await updating
       expect(changed).toBe(true)
-      const toolResult = JSON.parse(prompts[3] ?? '{}').messages.find(
-        (message: { tool_call_id?: string }) => message.tool_call_id === 'call-3'
-      )
-      const nativeToolPid = JSON.parse(toolResult.content).pid as number
+      const toolResult = JSON.parse(prompts[3] ?? '{}')
+        .messages.flatMap((message: { content: unknown[] }) => message.content)
+        .find((block: { tool_use_id?: string }) => block.tool_use_id === 'call-3')
+      const nativeToolPid = JSON.parse(toolResult.content.map((block: { text: string }) => block.text).join(''))
+        .pid as number
       expect(() => process.kill(nativeToolPid, 0)).toThrow()
       const next = await f.manager.run(session.id, { text: 'After resource update' })
       await drive(f.manager, next.runId)

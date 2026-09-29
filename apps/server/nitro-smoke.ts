@@ -37,7 +37,8 @@ try {
     const browserSession = await fetch(`${first.url}/auth/get-session`, { headers: { cookie } })
     assert.equal(browserSession.status, 200)
     const identity = await browserSession.json()
-    assert(identity.session && !('token' in identity.session))
+    assert(identity && typeof identity === 'object' && 'session' in identity)
+    assert(identity.session && typeof identity.session === 'object' && !('token' in identity.session))
     assert.equal(
       (await fetch(`${first.url}/auth/sign-up/email`, { headers: { origin: first.url }, method: 'POST' })).status,
       404

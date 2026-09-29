@@ -7,8 +7,9 @@ import { join } from 'node:path'
 import { type ProjectResources, RuntimeManager } from '@qingshaner/runtime'
 
 import { DshRuntime } from '../src/index'
+import { type ModelReply, modelReply } from './model.fixture'
 
-export type Reply = string | { name: string; arguments: Record<string, unknown> } | null
+export type Reply = ModelReply | null
 export const fixture = async (
   reply: (body: unknown, index: number) => Reply,
   resources?: (root: string) => Promise<ProjectResources>
@@ -24,24 +25,8 @@ export const fixture = async (
     if (answer === null) {
       return
     }
-    const delta =
-      typeof answer === 'string'
-        ? { content: answer, role: 'assistant' }
-        : {
-            role: 'assistant',
-            tool_calls: [
-              {
-                function: { arguments: JSON.stringify(answer.arguments), name: answer.name },
-                id: `call-${requests}`,
-                index: 0,
-                type: 'function'
-              }
-            ]
-          }
     response.writeHead(200, { 'content-type': 'text/event-stream' })
-    response.end(
-      `data: ${JSON.stringify({ choices: [{ delta, finish_reason: null, index: 0 }], id: `fixture-${requests}`, model: 'deepseek-v4-flash', object: 'chat.completion.chunk' })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: typeof answer === 'string' ? 'stop' : 'tool_calls', index: 0 }], id: `fixture-${requests}`, model: 'deepseek-v4-flash', object: 'chat.completion.chunk' })}\n\ndata: [DONE]\n\n`
-    )
+    response.end(modelReply(answer, `call-${requests}`))
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()

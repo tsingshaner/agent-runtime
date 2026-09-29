@@ -8,8 +8,8 @@ pnpm exec vitest run examples/probe-dsh/probe.test.ts
 ```
 
 The default run uses the **real official SDK and Harness**, paired at
-`0.1.5-rc.2`, with the official `sdk-minimal` profile. Only the model HTTP
-response is a deterministic local SSE fixture. The SDK creates and runs a
+`0.2.0-rc.1`, with the official `sdk-minimal` profile. Only the model HTTP
+response is a deterministic local Messages SSE fixture. The SDK creates and runs a
 session, closes its process, and starts a different process against the same
 isolated Harness home. No upstream source is patched.
 
@@ -67,7 +67,9 @@ This passes #11's clean-exit persistent continuation gate. Interrupted in-flight
 recovery remains **UNVERIFIED**; the result does not establish safety for
 resuming pending tool operations or finalize other lifecycle contracts.
 
-The implementation uses the published `0.1.5-rc.2` package declarations and
+The recorded hosted result above used `0.1.5-rc.2`; it does not establish hosted
+compatibility for the current version. The implementation uses the published
+`0.2.0-rc.1` package declarations and
 runtime code; primary upstream references:
 [SDK client](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/sdk/client),
 [SDK server](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/sdk/jsonrpc-server),

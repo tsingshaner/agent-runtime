@@ -78,3 +78,24 @@ ask DSH/Deep Agents for native user input or ask Codex for a long response, then
 Ctrl+C. Reopen through RuntimeManager and inspect the emitted Run ID: cancelled state,
 expired interactions and one terminal event. Failure to confirm native cancellation
 is reported distinctly; unfinished native state is preserved and refused on resume.
+
+## DSH upgrade — 2026-09-29
+
+Current SDK, Harness and DSH plugins are pinned to `0.2.0-rc.1`, with Cordis
+`4.0.4`. The earlier hosted results above remain evidence for `0.1.5-rc.2` only.
+The old lock mixed rc.2 tools with the rc.3 scheduler, failing before approval
+with an unavailable `prepare` method; separate Cordis peer instances also broke
+type augmentation. The new release pins its DSH peers to one release.
+
+The adapter now projects first-class tool-role results into AG-UI. Deterministic
+provider fixtures use DeepSeek Messages SSE; custom endpoints must support
+`/v1/messages`. The real-Harness lifecycle/resource tests and persistent probe
+pass, and built Nitro passes all eight native A2A/TanStack input, approve, deny
+and cancel scenarios. No upstream source is patched or failures skipped.
+Hosted-model behavior and migration of pre-upgrade native history were not tested
+on this release; same-version process restart/history restoration was tested.
+
+The credential-free full suite passes: 48 files, 301 tests; one file/three hosted
+checks skipped. Workspace and Nitro builds, all type checks, Biome, cspell, knip,
+frozen install and peer checks pass. The built Nitro smoke also passes. Existing
+Biome warnings and knip entry-pattern hints remain.

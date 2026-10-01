@@ -604,8 +604,8 @@ importers:
         specifier: ^2.3.4
         version: 2.3.5
       '@qingshaner/utility':
-        specifier: ^1.1.0
-        version: 1.1.0(@types/node@26.5.1)(typescript@7.0.2)
+        specifier: ^1.2.0
+        version: 1.2.0(@types/node@26.5.1)(typescript@7.0.2)
       es-toolkit:
         specifier: ^1.52.0
         version: 1.52.0
@@ -4099,8 +4099,8 @@ packages:
     peerDependencies:
       '@biomejs/biome': ^2.5.3
 
-  '@qingshaner/utility-client@1.1.0':
-    resolution: {integrity: sha512-urXqsifCxaTSt0/cSv5V5dMHywYV1pLuozlD9eMq9sltVmpbUTVxGWlF+JIuXuIg6azlUAsXQw7prvvXiGJBpw==}
+  '@qingshaner/utility-client@1.2.0':
+    resolution: {integrity: sha512-NT4HgH2DjV+HhdsXcE/wQS6/ElBYVR3oAu6LJCryQe8/13WmhWek0JmMMdZPE8uGfOGzcOhqqz/HL27zLr54fQ==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       typescript: '>=6.0.3'
@@ -4108,8 +4108,8 @@ packages:
       typescript:
         optional: true
 
-  '@qingshaner/utility-server@1.1.0':
-    resolution: {integrity: sha512-rov7+PZmJslgKg1mDz4UvW1SVVmsXVPlGJakL9fhmtp4LvxHkhFXO9M6tQoFgiqKAbFWZ6FMgXy5nlJo+Uu0GQ==}
+  '@qingshaner/utility-server@1.2.0':
+    resolution: {integrity: sha512-VrbvJA+WsBym9k4UsKWzoMv5tGDYVIcowiNZDieP5QozCLktnr5/iUkzSDWU6xYjtcP5h1a6cLdmsMF/mirw7Q==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       typescript: '>=6.0.3'
@@ -4117,8 +4117,8 @@ packages:
       typescript:
         optional: true
 
-  '@qingshaner/utility-shared@1.1.0':
-    resolution: {integrity: sha512-Xihryza4gDszwcXJJy9upV+jei6mEofLPyasesPH3ni8oCWDTOvanW88yOwFBDuI6ssFvzNweZUFfgQY+Hb1Uw==}
+  '@qingshaner/utility-shared@1.2.0':
+    resolution: {integrity: sha512-Izhp1d5EErPgJ4ieVWva3aYZUQDvuvH/fg/7wd+nfvW/z8amSrsW8vs00612C77BfMYQ7E5jt19lXTtmZp6EWw==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@types/node': '>=22.13.10'
@@ -4129,8 +4129,8 @@ packages:
       typescript:
         optional: true
 
-  '@qingshaner/utility@1.1.0':
-    resolution: {integrity: sha512-t0l2EjGAeRi9wK6X0qPzI7VSCVVkOs1T6bsPJharABtiYyyVb4oN7yLTcE3coNQhLV5EKisCyMEnaPzKFA4a6g==}
+  '@qingshaner/utility@1.2.0':
+    resolution: {integrity: sha512-L4lDCQ/2USJMn0ZW6hNECJ68pg3KEvFcEGM6zoR8YJ3HgD3XTUACOaI4qoRXyplYpFVue1PCfr8bjVuMwTRTIA==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       typescript: '>=6.0.3'
@@ -10730,23 +10730,23 @@ snapshots:
     dependencies:
       '@biomejs/biome': 2.5.13
 
-  '@qingshaner/utility-client@1.1.0(@types/node@26.5.1)(typescript@7.0.2)':
+  '@qingshaner/utility-client@1.2.0(@types/node@26.5.1)(typescript@7.0.2)':
     dependencies:
-      '@qingshaner/utility-shared': 1.1.0(@types/node@26.5.1)(typescript@7.0.2)
+      '@qingshaner/utility-shared': 1.2.0(@types/node@26.5.1)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:
       - '@types/node'
 
-  '@qingshaner/utility-server@1.1.0(@types/node@26.5.1)(typescript@7.0.2)':
+  '@qingshaner/utility-server@1.2.0(@types/node@26.5.1)(typescript@7.0.2)':
     dependencies:
-      '@qingshaner/utility-shared': 1.1.0(@types/node@26.5.1)(typescript@7.0.2)
+      '@qingshaner/utility-shared': 1.2.0(@types/node@26.5.1)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:
       - '@types/node'
 
-  '@qingshaner/utility-shared@1.1.0(@types/node@26.5.1)(typescript@7.0.2)':
+  '@qingshaner/utility-shared@1.2.0(@types/node@26.5.1)(typescript@7.0.2)':
     dependencies:
       klona: 2.0.6
       type-fest: 5.9.0
@@ -10754,11 +10754,11 @@ snapshots:
       '@types/node': 26.5.1
       typescript: 7.0.2
 
-  '@qingshaner/utility@1.1.0(@types/node@26.5.1)(typescript@7.0.2)':
+  '@qingshaner/utility@1.2.0(@types/node@26.5.1)(typescript@7.0.2)':
     dependencies:
-      '@qingshaner/utility-client': 1.1.0(@types/node@26.5.1)(typescript@7.0.2)
-      '@qingshaner/utility-server': 1.1.0(@types/node@26.5.1)(typescript@7.0.2)
-      '@qingshaner/utility-shared': 1.1.0(@types/node@26.5.1)(typescript@7.0.2)
+      '@qingshaner/utility-client': 1.2.0(@types/node@26.5.1)(typescript@7.0.2)
+      '@qingshaner/utility-server': 1.2.0(@types/node@26.5.1)(typescript@7.0.2)
+      '@qingshaner/utility-shared': 1.2.0(@types/node@26.5.1)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:

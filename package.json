@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",
-    "@changesets/cli": "^2.31.1",
+    "@changesets/cli": "^3.0.3",
     "@qingshaner/devtools": "^0.0.3",
     "@types/node": "^26.5.1",
     "@vitest/coverage-v8": "^5.0.0",

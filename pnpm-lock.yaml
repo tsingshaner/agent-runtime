@@ -337,10 +337,10 @@ importers:
         version: 1.63.0
       '@tailwindcss/vite':
         specifier: ^4.3.3
-        version: 4.3.3(vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1))
+        version: 4.3.3(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1))
       '@tanstack/router-plugin':
         specifier: ^1.168.41
-        version: 1.168.41(@tanstack/react-router@1.170.40(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.25.12)(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1))
+        version: 1.168.41(@tanstack/react-router@1.170.40(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1))
       '@types/react':
         specifier: ^19.3.0
         version: 19.3.0
@@ -349,7 +349,7 @@ importers:
         version: 19.3.0(@types/react@19.3.0)
       '@vitejs/plugin-react':
         specifier: ^6.1.1
-        version: 6.1.1(oxc-transform-react@0.153.0)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1))
+        version: 6.1.1(oxc-transform-react@0.153.0)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1))
       oxc-transform-react:
         specifier: ^0.153.0
         version: 0.153.0
@@ -358,7 +358,7 @@ importers:
         version: 4.3.3
       vite:
         specifier: ^8.3.1
-        version: 8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1)
+        version: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1)
 
   examples/a2a:
     dependencies:
@@ -680,8 +680,8 @@ importers:
         specifier: ^2.3.8
         version: 2.3.8
       '@qingshaner/utility':
-        specifier: ^1.2.0
-        version: 1.2.0(@types/node@26.6.3)(typescript@7.0.2)
+        specifier: ^1.2.1
+        version: 1.2.1(@types/node@26.6.3)(typescript@7.0.2)
       es-toolkit:
         specifier: ^1.52.0
         version: 1.52.0
@@ -4951,8 +4951,8 @@ packages:
     peerDependencies:
       '@biomejs/biome': ^2.5.3
 
-  '@qingshaner/utility-client@1.2.0':
-    resolution: {integrity: sha512-NT4HgH2DjV+HhdsXcE/wQS6/ElBYVR3oAu6LJCryQe8/13WmhWek0JmMMdZPE8uGfOGzcOhqqz/HL27zLr54fQ==}
+  '@qingshaner/utility-client@1.2.1':
+    resolution: {integrity: sha512-gcWVPcmZ23qxYUBurmbDJ09ghLA3OquvV6B+ODwslF7j+M1B7lpUeNxFsoMmdC3KqB7VOfXxe3CnBhWOc8x/Bg==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       typescript: '>=6.0.3'
@@ -4960,8 +4960,8 @@ packages:
       typescript:
         optional: true
 
-  '@qingshaner/utility-server@1.2.0':
-    resolution: {integrity: sha512-VrbvJA+WsBym9k4UsKWzoMv5tGDYVIcowiNZDieP5QozCLktnr5/iUkzSDWU6xYjtcP5h1a6cLdmsMF/mirw7Q==}
+  '@qingshaner/utility-server@1.2.1':
+    resolution: {integrity: sha512-s/v/KdZZQJyYTsESo9sH9m/aYHS9F8azWVnICBNnc3gQmjsoZnD6pqm2VY4YSNru6sjFb39YP5QCEQgbCa+Q3g==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       typescript: '>=6.0.3'
@@ -4969,8 +4969,8 @@ packages:
       typescript:
         optional: true
 
-  '@qingshaner/utility-shared@1.2.0':
-    resolution: {integrity: sha512-Izhp1d5EErPgJ4ieVWva3aYZUQDvuvH/fg/7wd+nfvW/z8amSrsW8vs00612C77BfMYQ7E5jt19lXTtmZp6EWw==}
+  '@qingshaner/utility-shared@1.2.1':
+    resolution: {integrity: sha512-c0v+HbaT5loxy8k1GTAZiGpfdFjmh93SDz9B3uYKtkGIKIxBGGZIqliknBaK5l6bYV1vWDtS4aj3+y262TP7Bw==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@types/node': '>=22.13.10'
@@ -4981,8 +4981,8 @@ packages:
       typescript:
         optional: true
 
-  '@qingshaner/utility@1.2.0':
-    resolution: {integrity: sha512-L4lDCQ/2USJMn0ZW6hNECJ68pg3KEvFcEGM6zoR8YJ3HgD3XTUACOaI4qoRXyplYpFVue1PCfr8bjVuMwTRTIA==}
+  '@qingshaner/utility@1.2.1':
+    resolution: {integrity: sha512-PtLnNr0zaTYJpLEvEltX1yftBHLE/2ci1ZHN2ZNUbq7cX3dwBqjnEau5ZDcJ5YZ76ldByZrLDgNVRO0bnazvBw==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       typescript: '>=6.0.3'
@@ -13318,23 +13318,23 @@ snapshots:
     dependencies:
       '@biomejs/biome': 2.5.14
 
-  '@qingshaner/utility-client@1.2.0(@types/node@26.6.3)(typescript@7.0.2)':
+  '@qingshaner/utility-client@1.2.1(@types/node@26.6.3)(typescript@7.0.2)':
     dependencies:
-      '@qingshaner/utility-shared': 1.2.0(@types/node@26.6.3)(typescript@7.0.2)
+      '@qingshaner/utility-shared': 1.2.1(@types/node@26.6.3)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:
       - '@types/node'
 
-  '@qingshaner/utility-server@1.2.0(@types/node@26.6.3)(typescript@7.0.2)':
+  '@qingshaner/utility-server@1.2.1(@types/node@26.6.3)(typescript@7.0.2)':
     dependencies:
-      '@qingshaner/utility-shared': 1.2.0(@types/node@26.6.3)(typescript@7.0.2)
+      '@qingshaner/utility-shared': 1.2.1(@types/node@26.6.3)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:
       - '@types/node'
 
-  '@qingshaner/utility-shared@1.2.0(@types/node@26.6.3)(typescript@7.0.2)':
+  '@qingshaner/utility-shared@1.2.1(@types/node@26.6.3)(typescript@7.0.2)':
     dependencies:
       klona: 2.0.6
       type-fest: 5.10.0
@@ -13342,11 +13342,11 @@ snapshots:
       '@types/node': 26.6.3
       typescript: 7.0.2
 
-  '@qingshaner/utility@1.2.0(@types/node@26.6.3)(typescript@7.0.2)':
+  '@qingshaner/utility@1.2.1(@types/node@26.6.3)(typescript@7.0.2)':
     dependencies:
-      '@qingshaner/utility-client': 1.2.0(@types/node@26.6.3)(typescript@7.0.2)
-      '@qingshaner/utility-server': 1.2.0(@types/node@26.6.3)(typescript@7.0.2)
-      '@qingshaner/utility-shared': 1.2.0(@types/node@26.6.3)(typescript@7.0.2)
+      '@qingshaner/utility-client': 1.2.1(@types/node@26.6.3)(typescript@7.0.2)
+      '@qingshaner/utility-server': 1.2.1(@types/node@26.6.3)(typescript@7.0.2)
+      '@qingshaner/utility-shared': 1.2.1(@types/node@26.6.3)(typescript@7.0.2)
     optionalDependencies:
       typescript: 7.0.2
     transitivePeerDependencies:
@@ -13565,12 +13565,12 @@ snapshots:
       '@tailwindcss/oxide-win32-arm64-msvc': 4.3.3
       '@tailwindcss/oxide-win32-x64-msvc': 4.3.3
 
-  '@tailwindcss/vite@4.3.3(vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1))':
+  '@tailwindcss/vite@4.3.3(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
       '@tailwindcss/node': 4.3.3
       '@tailwindcss/oxide': 4.3.3
       tailwindcss: 4.3.3
-      vite: 8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1)
+      vite: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1)
 
   '@tanstack/ai-client@0.32.0(@opentelemetry/api@1.9.1)(zod@4.6.5)':
     dependencies:
@@ -13646,7 +13646,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@tanstack/router-plugin@1.168.41(@tanstack/react-router@1.170.40(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.25.12)(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1))':
+  '@tanstack/router-plugin@1.168.41(@tanstack/react-router@1.170.40(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
       '@babel/core': 7.29.7
       '@babel/template': 7.29.7
@@ -13655,11 +13655,11 @@ snapshots:
       '@tanstack/router-generator': 1.167.39
       '@tanstack/router-utils': 1.162.3
       chokidar: 5.0.0
-      unplugin: 3.4.0(esbuild@0.25.12)(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1))
+      unplugin: 3.4.0(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1))
       zod: 4.6.5
     optionalDependencies:
       '@tanstack/react-router': 1.170.40(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      vite: 8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1)
+      vite: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1)
     transitivePeerDependencies:
       - '@farmfe/core'
       - '@rspack/core'
@@ -13807,10 +13807,10 @@ snapshots:
 
   '@ungap/structured-clone@1.4.0': {}
 
-  '@vitejs/plugin-react@6.1.1(oxc-transform-react@0.153.0)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1))':
+  '@vitejs/plugin-react@6.1.1(oxc-transform-react@0.153.0)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
-      vite: 8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1)
+      vite: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1)
     optionalDependencies:
       oxc-transform-react: 0.153.0
 
@@ -13839,7 +13839,7 @@ snapshots:
       estree-walker: 3.0.3
       magic-string: 1.4.2
     optionalDependencies:
-      vite: 8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1)
+      vite: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1)
 
   '@vitest/spy@5.0.2': {}
 
@@ -16365,15 +16365,14 @@ snapshots:
 
   unpipe@1.0.0: {}
 
-  unplugin@3.4.0(esbuild@0.25.12)(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1)):
+  unplugin@3.4.0(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1)):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       picomatch: 4.0.7
       webpack-virtual-modules: 0.6.2
     optionalDependencies:
-      esbuild: 0.25.12
       rolldown: 1.2.11
-      vite: 8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1)
+      vite: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1)
 
   unstorage@2.0.0-alpha.10: {}
 
@@ -16403,7 +16402,7 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite@8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1):
+  vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -16412,7 +16411,6 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 26.6.3
-      esbuild: 0.25.12
       fsevents: 2.3.3
       jiti: 2.7.0
       yaml: 2.9.1
@@ -16431,7 +16429,7 @@ snapshots:
       tinybench: 6.2.0
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
-      vite: 8.3.1(@types/node@26.6.3)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.1)
+      vite: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)(yaml@2.9.1)
       why-is-node-running: 3.2.2
     optionalDependencies:
       '@opentelemetry/api': 1.9.1

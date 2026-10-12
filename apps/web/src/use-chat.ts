@@ -88,5 +88,12 @@ export const useChatModel = (projectId: string, sessionId: string) => {
       (session.data?.archived ? api.sessions.unarchive : api.sessions.archive)({ params: { id: sessionId } }),
     onSuccess: refresh
   })
-  return { archive, composer: { error, pending, send, setText, submit, text }, runs, session }
+  return {
+    archive,
+    busy: Boolean(session.data?.activeRunId) || submit.isPending,
+    composer: { error, pending, send, setText, submit, text },
+    emptyHistory: runs.isSuccess && runs.data.pages.every((page) => page.items.length === 0),
+    runs,
+    session
+  }
 }

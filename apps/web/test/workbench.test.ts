@@ -8,11 +8,12 @@ import { Readable } from 'node:stream'
 
 import type { ServerResponse } from 'node:http'
 import { expect as browserExpect, chromium } from '@playwright/test'
-import { parseEvent } from '@qingshaner/runtime'
+import { parseEvent, RuntimeError } from '@qingshaner/runtime'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import type { Browser, Page } from '@playwright/test'
 
+import { SessionStore } from '../../../packages/runtime/src/store'
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
 import { openTestService } from '../../server/test/service.fixture'
 
@@ -22,6 +23,7 @@ let directory: string
 let service: Awaited<ReturnType<typeof openTestService>>
 let origin: string
 let adapter: ManualAdapter
+let resumeError: RuntimeError | undefined
 const streams = new Map<string, ServerResponse>()
 const cursors: number[] = []
 const server = createServer(async (incoming, outgoing) => {
@@ -84,12 +86,8 @@ beforeAll(async () => {
   browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL, headless: true })
 }, 60000)
 
-beforeEach(async () => {
-  directory = await realpath(await mkdtemp(join(tmpdir(), 'web-workbench-')))
-  adapter = new ManualAdapter()
-  cursors.length = 0
-  streams.clear()
-  service = await openTestService({
+const openService = () =>
+  openTestService({
     dataDir: directory,
     defaultModel: 'deployment-model',
     origin,
@@ -103,10 +101,23 @@ beforeEach(async () => {
         respondApproval: adapter.respondApproval.bind(adapter),
         respondApprovalBatch: adapter.respondApprovalBatch.bind(adapter),
         respondInput: adapter.respondInput.bind(adapter),
-        resumeSession: adapter.resumeSession.bind(adapter)
+        resumeSession: (session) => {
+          if (resumeError) {
+            return Promise.reject(resumeError)
+          }
+          return adapter.resumeSession(session)
+        }
       }
     ]
   })
+
+beforeEach(async () => {
+  directory = await realpath(await mkdtemp(join(tmpdir(), 'web-workbench-')))
+  adapter = new ManualAdapter()
+  cursors.length = 0
+  streams.clear()
+  resumeError = undefined
+  service = await openService()
 
   page = await browser.newPage()
   await page.goto(origin)
@@ -681,3 +692,180 @@ test('renders untrusted strings as text and never treats user or tool content as
   expect(requests).toEqual([])
   expect(adapter.executions.size).toBe(1)
 }, 30000)
+
+test('restores the selected active session after logout and an unauthenticated deep link', async () => {
+  await createProject('Login history')
+  await createSession('Keep selection')
+  const selectedUrl = page.url()
+  await page.getByLabel('消息').fill('keep running')
+  await page.getByRole('button', { exact: true, name: '发送' }).click()
+  await expect.poll(() => adapter.executions.size).toBe(1)
+  const runId = [...adapter.executions.keys()][0]!
+  await browserExpect(page.getByRole('button', { name: '归档会话' })).toBeDisabled()
+
+  for (const deepLink of [false, true]) {
+    await page.getByRole('button', { name: '退出登录' }).click()
+    await browserExpect(page.getByLabel('访问令牌')).toBeVisible()
+    await browserExpect(page.getByText('keep running', { exact: true })).toHaveCount(0)
+    if (deepLink) {
+      await page.goto(selectedUrl)
+    }
+    await page.getByLabel('访问令牌').fill(service.token)
+    await page.getByRole('button', { name: '进入工作台' }).click()
+    await browserExpect(page).toHaveURL(selectedUrl)
+    await browserExpect(page.getByText('keep running', { exact: true })).toBeVisible()
+    await browserExpect(page.getByRole('button', { name: '归档会话' })).toBeDisabled()
+  }
+  await adapter.push(runId, {
+    event: parseEvent({ messageId: 'resume', role: 'assistant', type: 'TEXT_MESSAGE_START' }),
+    kind: 'event'
+  })
+  await adapter.push(runId, {
+    event: parseEvent({ delta: 'still subscribed', messageId: 'resume', type: 'TEXT_MESSAGE_CONTENT' }),
+    kind: 'event'
+  })
+  await browserExpect(page.getByText('still subscribed', { exact: true })).toBeVisible()
+  expect(adapter.executions.size).toBe(1)
+  expect(adapter.cancelled).toHaveLength(0)
+  adapter.finish(runId, { status: 'succeeded' })
+}, 30000)
+
+test('distinguishes an empty history from a failed history read', async () => {
+  await createProject('Empty history')
+  await createSession('No runs')
+  await browserExpect(page.getByText('暂无消息，发送第一条消息开始会话。')).toBeVisible()
+  await page.route('**/sessions/*/runs*', (route) => route.abort())
+  await page.reload()
+  await browserExpect(page.getByText('历史加载失败')).toBeVisible()
+  await browserExpect(page.getByText('暂无消息，发送第一条消息开始会话。')).toHaveCount(0)
+  await page.unrouteAll()
+  await page.getByRole('alert').filter({ hasText: '历史加载失败' }).getByRole('button', { name: '重试' }).click()
+  await browserExpect(page.getByText('暂无消息，发送第一条消息开始会话。')).toBeVisible()
+}, 30000)
+
+test('pages durable sessions and runs and preserves history through archive and recovery', async () => {
+  await createProject('Paged history')
+  await createSession('Oldest session')
+  const selectedUrl = page.url()
+  const search = new URL(selectedUrl).searchParams
+  const sessionId = search.get('session')!
+  for (let index = 0; index < 50; index++) {
+    const response = await page.request.post(`${origin}/sessions`, {
+      data: {
+        cwd: directory,
+        model: 'test-model',
+        projectId: search.get('project'),
+        runtime: 'codex',
+        title: `Session ${index}`
+      },
+      headers: { origin }
+    })
+    expect(response.status()).toBe(200)
+  }
+  for (let index = 0; index < 51; index++) {
+    const response = await page.request.post(`${origin}/sessions/${sessionId}/runs`, {
+      data: { text: `History message ${index}` },
+      headers: { origin }
+    })
+    expect(response.status()).toBe(200)
+    const { runId } = await response.json()
+    await adapter.waitStarted(runId)
+    adapter.finish(runId, { status: 'succeeded' })
+    await expect
+      .poll(async () => (await (await page.request.get(`${origin}/runs/${runId}`)).json()).status)
+      .toBe('succeeded')
+  }
+  await page.reload()
+  await browserExpect(page.getByRole('link', { exact: true, name: 'Oldest session' })).toHaveCount(0)
+  await page.getByRole('button', { name: '更多会话' }).click()
+  await browserExpect(page.getByRole('link', { exact: true, name: 'Oldest session' })).toBeVisible()
+  await browserExpect(page.getByText('History message 0', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '更早的消息' }).click()
+  await browserExpect(page.getByText('History message 0', { exact: true })).toBeVisible()
+  await browserExpect(page.locator('article')).toHaveCount(51)
+  expect(await page.locator('article > p:first-child').allTextContents()).toEqual(
+    Array.from({ length: 51 }, (_, index) => `History message ${index}`)
+  )
+  const before = await (await page.request.get(`${origin}/sessions/${sessionId}`)).json()
+  await page.getByRole('button', { exact: true, name: '归档会话' }).click()
+  await browserExpect(page.getByRole('button', { name: '恢复会话' })).toBeVisible()
+  await page.reload()
+  await browserExpect(page.getByText('History message 50', { exact: true })).toBeVisible()
+  await browserExpect(page.getByLabel('消息')).toBeDisabled()
+  await page.setViewportSize({ height: 844, width: 390 })
+  await page.getByRole('button', { name: '展开导航' }).focus()
+  await page.keyboard.press('Enter')
+  await page.getByLabel('显示已归档').focus()
+  await page.keyboard.press('Space')
+  await page.getByRole('link', { exact: true, name: 'Oldest session' }).focus()
+  await page.keyboard.press('Enter')
+  await browserExpect(page.getByRole('button', { name: '展开导航' })).toBeVisible()
+  await page.getByRole('button', { name: '恢复会话' }).focus()
+  await page.keyboard.press('Enter')
+  await browserExpect(page.getByRole('button', { name: '归档会话' })).toBeVisible()
+  const after = await (await page.request.get(`${origin}/sessions/${sessionId}`)).json()
+  expect(after.nativeSessionId).toBe(before.nativeSessionId)
+  expect(adapter.executions.size).toBe(51)
+  expect(adapter.created).toHaveLength(51)
+}, 60000)
+
+test('opens persisted interrupted history in a new service without replaying native work', async () => {
+  await createProject('Restart history')
+  await createSession('Interrupted session')
+  const selectedUrl = page.url()
+  const sessionId = new URL(selectedUrl).searchParams.get('session')!
+  await page.goto(`${origin}/login`)
+  await service.close()
+  // Seed the durable state left by an interrupted host, as in the runtime recovery suite.
+  const store = await SessionStore.open(directory)
+  await store.beginRun(sessionId, 'interrupted-run', { requestId: 'original-request', text: 'persisted request' })
+  await store.appendEvent(
+    'interrupted-run',
+    parseEvent({ messageId: 'saved', role: 'assistant', type: 'TEXT_MESSAGE_START' })
+  )
+  await store.appendEvent(
+    'interrupted-run',
+    parseEvent({ delta: 'persisted answer', messageId: 'saved', type: 'TEXT_MESSAGE_CONTENT' })
+  )
+  await store.close()
+  adapter = new ManualAdapter()
+  service = await openService()
+
+  await page.goto(selectedUrl)
+  await page.getByLabel('访问令牌').fill(service.token)
+  await page.getByRole('button', { name: '进入工作台' }).click()
+  await browserExpect(page).toHaveURL(selectedUrl)
+  await browserExpect(page.getByText('执行已中断', { exact: true })).toBeVisible()
+  await browserExpect(page.getByText('persisted request', { exact: true })).toBeVisible()
+  await browserExpect(page.getByText('persisted answer', { exact: true })).toBeVisible()
+  await page.reload()
+  await browserExpect(page.getByText('执行已中断', { exact: true })).toHaveCount(1)
+  expect(adapter.created).toHaveLength(0)
+  expect(adapter.resumed).toHaveLength(0)
+  expect(adapter.executions.size).toBe(0)
+}, 30000)
+
+test.each([
+  ['RPC_ERROR', 'Native thread history not found'],
+  ['PROTOCOL_ERROR', 'Resumed thread identity does not match']
+])(
+  'reports %s when the native session cannot resume without replacing its identity',
+  async (code, message) => {
+    await createProject('Native history')
+    await createSession('Original session')
+    const sessionId = new URL(page.url()).searchParams.get('session')!
+    const before = await (await page.request.get(`${origin}/sessions/${sessionId}`)).json()
+    resumeError = new RuntimeError(code, message)
+    await page.getByLabel('消息').fill('resume the original')
+    await page.getByRole('button', { exact: true, name: '发送' }).click()
+    await browserExpect(page.getByText('执行失败', { exact: true })).toBeVisible()
+    await browserExpect(page.getByRole('alert').filter({ hasText: code })).toBeVisible()
+    await page.reload()
+    await browserExpect(page.getByRole('alert').filter({ hasText: code })).toBeVisible()
+    const after = await (await page.request.get(`${origin}/sessions/${sessionId}`)).json()
+    expect(after.nativeSessionId).toBe(before.nativeSessionId)
+    expect(adapter.created).toHaveLength(1)
+    expect(adapter.executions.size).toBe(0)
+  },
+  30000
+)

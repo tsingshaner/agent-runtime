@@ -6,9 +6,11 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 
 import { authClient } from './auth'
+import { Route } from './routes/login'
 
 export const LoginFeature = () => {
   const navigate = useNavigate()
+  const search = Route.useSearch()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -27,7 +29,7 @@ export const LoginFeature = () => {
         setError(result.error.status === 401 ? '访问令牌无效，请重新输入。' : '暂时无法登录，请检查服务连接后重试。')
         return
       }
-      await navigate({ replace: true, to: '/workspace' })
+      await navigate({ replace: true, search, to: '/workspace' })
     } catch {
       setError('暂时无法登录，请检查服务连接后重试。')
     } finally {

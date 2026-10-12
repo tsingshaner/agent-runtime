@@ -35,7 +35,7 @@ const toolStates: Record<ToolCallState, string> = {
 }
 
 export const ChatFeature = ({ projectId, sessionId }: { projectId: string; sessionId: string }) => {
-  const { session, runs, composer, archive } = useChatModel(projectId, sessionId)
+  const { session, runs, composer, archive, busy, emptyHistory } = useChatModel(projectId, sessionId)
   if (session.isPending) {
     return <p role="status">正在加载会话…</p>
   }
@@ -49,7 +49,6 @@ export const ChatFeature = ({ projectId, sessionId }: { projectId: string; sessi
       </p>
     )
   }
-  const busy = Boolean(session.data.activeRunId) || composer.submit.isPending
   return (
     <section className="mt-4 max-w-4xl">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -76,6 +75,7 @@ export const ChatFeature = ({ projectId, sessionId }: { projectId: string; sessi
           </button>
         </p>
       )}
+      {emptyHistory && <p className="mt-4 text-sm text-stone-500">暂无消息，发送第一条消息开始会话。</p>}
       {runs.hasNextPage && (
         <button
           className="text-button"

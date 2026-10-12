@@ -5,10 +5,12 @@ import { useEffect, useState } from 'react'
 import { queryClient } from './api'
 import { authClient } from './auth'
 import { ProjectWorkspaceFeature } from './projects'
+import { Route } from './routes/workspace'
 
 export const WorkspaceFeature = () => {
   const { data: session, isPending, error: sessionError } = authClient.useSession()
   const navigate = useNavigate()
+  const search = Route.useSearch()
   const [leaving, setLeaving] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -26,7 +28,7 @@ export const WorkspaceFeature = () => {
       }
       await queryClient.cancelQueries()
       queryClient.clear()
-      await navigate({ replace: true, to: '/login' })
+      await navigate({ replace: true, search, to: '/login' })
     } catch {
       setError('暂时无法退出，请检查连接后重试。')
     } finally {
@@ -51,7 +53,7 @@ export const WorkspaceFeature = () => {
     )
   }
   if (!session) {
-    return <Navigate replace to="/login" />
+    return <Navigate replace search={search} to="/login" />
   }
   return (
     <>

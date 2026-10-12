@@ -12,6 +12,7 @@ import * as z from 'zod/mini'
 import { safeError } from './error.ts'
 import { onShutdown } from './infra/shutdown.ts'
 import { createAuthorization } from './middlewares/auth.ts'
+import presentationInstructions from './openui-prompt.json' with { type: 'json' }
 import { router, type ServiceOptions } from './router/index.ts'
 import { specification } from './spec.ts'
 
@@ -55,6 +56,7 @@ export const createService = async (options: ServerOptions) => {
   }
   const manager = await RuntimeManager.open({
     dataDir: options.dataDir,
+    instructions: presentationInstructions,
     memory: options.memory,
     memoryTimeoutMs: options.memoryTimeoutMs,
     resources: options.resources,

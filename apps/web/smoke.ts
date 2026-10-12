@@ -32,8 +32,23 @@ if (process.env.RUN_REAL_CODEX !== '1' || !process.env.CODEX_MODEL) {
       await expect(page.getByText('WEB_SMOKE_OK', { exact: true })).toBeVisible()
       await page.reload()
       await expect(page.getByText('WEB_SMOKE_OK', { exact: true })).toBeVisible()
+      await page
+        .getByLabel('消息')
+        .fill(
+          '请使用只读卡片和表格展示以下结果：卡片标题为“发布摘要”，正文为“核心能力已完成”；表格标题为“方案比较”，列为“名称”和“状态”，仅一行“方案 A”和“可用”。不要调用工具。'
+        )
+      await page.getByRole('button', { exact: true, name: '发送' }).click()
+      await expect(page.getByRole('heading', { exact: true, name: '发布摘要' })).toBeVisible({ timeout: 120000 })
+      await expect(page.getByRole('table', { name: '方案比较' }).getByRole('cell', { name: '可用' })).toBeVisible({
+        timeout: 120000
+      })
+      await expect(page.getByText('已完成', { exact: true })).toHaveCount(2, { timeout: 120000 })
+      await expect(page.getByText('富内容无法完整显示，已保留原文。')).toHaveCount(0)
+      await page.reload()
+      await expect(page.getByRole('heading', { exact: true, name: '发布摘要' })).toBeVisible()
+      await expect(page.getByRole('table', { name: '方案比较' }).getByRole('cell', { name: '方案 A' })).toBeVisible()
       process.stdout.write(
-        'PASS: real Codex text and browser history recovery. UNVERIFIED: real tools, approvals and resources.\n'
+        'PASS: real Codex text, OpenUI card/table generation and browser history recovery. UNVERIFIED: real tools, approvals and resources.\n'
       )
     } finally {
       await browser.close()

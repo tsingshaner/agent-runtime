@@ -46,6 +46,7 @@ const CreateSessionSchema = z.strictObject({
 const RunInputSchema = z.strictObject({ requestId: z.optional(NonBlankString), text: NonBlankString })
 const ManagerOptionsSchema = z.strictObject({
   dataDir: NonBlankString,
+  instructions: z.optional(NonBlankString),
   memory: z.optional(
     z.custom<MemoryProvider>(
       (value) =>
@@ -100,6 +101,7 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
   readonly #adapters: Map<string, RuntimeAdapter>
   readonly #memory: MemoryProvider | undefined
   readonly #memoryTimeoutMs: number
+  readonly #instructions: string | undefined
   readonly #resources: ProjectResources | undefined
 
   private constructor(
@@ -107,13 +109,15 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     adapters: Map<string, RuntimeAdapter>,
     memory?: MemoryProvider,
     memoryTimeoutMs = 5000,
-    resources?: ProjectResources
+    resources?: ProjectResources,
+    instructions?: string
   ) {
     this.#store = store
     this.#adapters = adapters
     this.#memory = memory
     this.#memoryTimeoutMs = memoryTimeoutMs
     this.#resources = resources
+    this.#instructions = instructions
   }
 
   /**
@@ -133,7 +137,14 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
     const store = await SessionStore.open(validated.dataDir)
     try {
       await store.recoverInterrupted()
-      return new RuntimeManager<A>(store, adapters, validated.memory, validated.memoryTimeoutMs, validated.resources)
+      return new RuntimeManager<A>(
+        store,
+        adapters,
+        validated.memory,
+        validated.memoryTimeoutMs,
+        validated.resources,
+        validated.instructions
+      )
     } catch (cause) {
       const error = new RuntimeError('STORAGE_ERROR', 'Failed to recover unfinished runs', { cause })
       try {
@@ -716,7 +727,13 @@ export class RuntimeManager<A extends RuntimeAdapter = RuntimeAdapter> {
       this.#assertRunning()
       const execution = adapter.execute(
         native,
-        { ...input, ...(context ? { context } : {}), runId, sessionId: session.id },
+        {
+          ...input,
+          ...(context ? { context } : {}),
+          runId,
+          sessionId: session.id,
+          text: this.#instructions ? `${this.#instructions}\n\nUser request:\n${input.text}` : input.text
+        },
         (notice) => {
           if (notice.kind === 'approval-batch' && !adapter.respondApprovalBatch) {
             throw new RuntimeError('UNSUPPORTED_APPROVAL', 'Runtime cannot respond to batches')

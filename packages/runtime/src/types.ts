@@ -322,6 +322,8 @@ export interface SessionFilter {
  * Persistent data directory and runtime adapters owned by the manager.
  */
 export interface ManagerOptions<A extends RuntimeAdapter = RuntimeAdapter> {
+  /** Host presentation instructions, excluded from stored user input and Memory writes. */
+  instructions?: string
   resources?: ProjectResources
   memory?: MemoryProvider
   memoryTimeoutMs?: number

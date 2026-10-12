@@ -17,6 +17,8 @@ ignorePaths:
   - bun.lock.json
 
 words:
+  - openui
+  - openuidev
   - prefault
   - srvx
   - modelcontextprotocol

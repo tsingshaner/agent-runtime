@@ -7,6 +7,7 @@ import type { ToolCallState, UIMessage } from '@tanstack/ai-client'
 import type { ReactNode } from 'react'
 
 import { RunInteractions } from './interactions'
+import { OpenUiBlock } from './openui'
 import { useChatModel } from './use-chat'
 import { useRunStream } from './use-run-stream'
 
@@ -167,18 +168,47 @@ const RunFeature = ({ run }: { run: Run }) => {
         <div className="space-y-3" key={message.id}>
           {message.parts.map((part, index) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: StreamProcessor parts append in stable order and text parts have no ID.
-            <MessagePart key={index} part={part} />
+            <MessagePart key={index} part={part} rich={message.role === 'assistant'} streaming={!run.endedAt} />
           ))}
         </div>
       ))}
     </article>
   )
 }
-const MessagePart = ({ part }: { part: UIMessage['parts'][number] }) => {
+const MessagePart = ({
+  part,
+  rich,
+  streaming
+}: {
+  part: UIMessage['parts'][number]
+  rich: boolean
+  streaming: boolean
+}) => {
   if (part.type === 'text') {
     return (
       <div className="markdown break-words">
-        <Markdown components={{ img: () => null, pre: CodeBlock }} skipHtml>
+        <Markdown
+          components={{
+            img: () => null,
+            pre: ({ node, children }) => {
+              const code = node?.children[0]
+              const raw = part.content.slice(node?.position?.start.offset, node?.position?.end.offset)
+              const opening = /^ {0,3}(`{3,}|~{3,})openui[ \t]*\r?\n/.exec(raw)
+              if (rich && opening && code?.type === 'element' && code.children[0]?.type === 'text') {
+                const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(raw.trimEnd().split('\n').at(-1) ?? '')
+                const closed = Boolean(
+                  closing?.[1] &&
+                    opening[1] &&
+                    closing[1][0] === opening[1][0] &&
+                    closing[1].length >= opening[1].length
+                )
+                return <OpenUiBlock closed={closed} source={code.children[0].value} streaming={streaming} />
+              }
+              return <CodeBlock>{children}</CodeBlock>
+            }
+          }}
+          skipHtml
+        >
           {part.content}
         </Markdown>
       </div>

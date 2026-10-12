@@ -1,3 +1,4 @@
+// cspell:ignore enui
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -246,6 +247,19 @@ test('restores mixed approvals and input, and waits for the actual cancellation 
   await expect.poll(() => [...adapter.executions.keys()].find((id) => !before.has(id))).toBeTruthy()
   const runId = [...adapter.executions.keys()].find((id) => !before.has(id))!
   await adapter.push(runId, {
+    event: parseEvent({ messageId: 'ui', role: 'assistant', type: 'TEXT_MESSAGE_START' }),
+    kind: 'event'
+  })
+  await adapter.push(runId, {
+    event: parseEvent({
+      delta: '```openui\nroot = Card("操作摘要", "等待决定")\n```',
+      messageId: 'ui',
+      type: 'TEXT_MESSAGE_CONTENT'
+    }),
+    kind: 'event'
+  })
+  await browserExpect(page.getByRole('heading', { name: '操作摘要' })).toBeVisible()
+  await adapter.push(runId, {
     kind: 'approval-batch',
     request: {
       nativeRequestId: 'batch',
@@ -426,4 +440,244 @@ test('shows loading and transport failures, isolates project sessions, and resto
   await page.unrouteAll()
   await page.getByRole('navigation', { exact: true, name: '项目' }).getByRole('button', { name: '重试' }).click()
   await browserExpect(page.getByRole('link', { exact: true, name: 'Project A' })).toBeVisible()
+}, 30000)
+
+test('generates a card with presentation instructions and restores it from history', async () => {
+  await createProject('Cards')
+  await createSession('Card conversation')
+  await page.getByLabel('消息').fill('用卡片总结本次发布')
+  await page.getByRole('button', { exact: true, name: '发送' }).click()
+  await expect.poll(() => adapter.executions.size).toBe(1)
+  const runId = [...adapter.executions.keys()][0]!
+  expect(adapter.executions.get(runId)?.text).toContain('Card(')
+  expect(adapter.executions.get(runId)?.text).toContain('用卡片总结本次发布')
+  await adapter.push(runId, {
+    event: parseEvent({ messageId: 'card', role: 'assistant', type: 'TEXT_MESSAGE_START' }),
+    kind: 'event'
+  })
+  for (const delta of ['发布摘要\n\n```op', 'enui\nroot = Card("发布进度", "', '已完成核心能力")\n']) {
+    await adapter.push(runId, {
+      event: parseEvent({ delta, messageId: 'card', type: 'TEXT_MESSAGE_CONTENT' }),
+      kind: 'event'
+    })
+  }
+  await browserExpect(page.getByRole('heading', { name: '发布进度' })).toBeVisible()
+  await browserExpect(page.getByText('已完成核心能力', { exact: true })).toBeVisible()
+  await adapter.push(runId, {
+    event: parseEvent({ delta: '```\n\n**下一步**', messageId: 'card', type: 'TEXT_MESSAGE_CONTENT' }),
+    kind: 'event'
+  })
+  adapter.finish(runId, { status: 'succeeded' })
+  await browserExpect(page.getByText('已完成', { exact: true })).toBeVisible()
+  await page.reload()
+  await browserExpect(page.getByRole('heading', { name: '发布进度' })).toBeVisible()
+  await browserExpect(page.locator('strong').filter({ hasText: '下一步' })).toBeVisible()
+  await browserExpect(page.getByText('用卡片总结本次发布', { exact: true })).toBeVisible()
+  expect(adapter.executions.size).toBe(1)
+}, 30000)
+
+test('streams mixed cards and accessible tables across chunks and restores their order', async () => {
+  await createProject('Tables')
+  await createSession('Comparison')
+  await page.getByLabel('消息').fill('用表格比较方案，再给出卡片结论')
+  await page.getByRole('button', { exact: true, name: '发送' }).click()
+  await expect.poll(() => adapter.executions.size).toBe(1)
+  const runId = [...adapter.executions.keys()][0]!
+  expect(adapter.executions.get(runId)?.text).toContain('Table(')
+  await adapter.push(runId, {
+    event: parseEvent({ messageId: 'mixed', role: 'assistant', type: 'TEXT_MESSAGE_START' }),
+    kind: 'event'
+  })
+  for (const delta of [
+    '方案比较\n\n```openui\nroot = Table("候选方案", ["名称", "状态"], [["方案 A", ',
+    '"可用"], ["方案 B", "待验证"]])\n',
+    '```\n\n```openui\nroot = Card("建议", "先采用方案 A")\n```\n\n',
+    '```openui\nroot = Table("后续计划", ["Requirements", "Implementation", "Verification", "Documentation", "Deployment"], [])\n```'
+  ]) {
+    await adapter.push(runId, {
+      event: parseEvent({ delta, messageId: 'mixed', type: 'TEXT_MESSAGE_CONTENT' }),
+      kind: 'event'
+    })
+  }
+  const table = page.getByRole('table', { name: '候选方案' })
+  await browserExpect(table.getByRole('columnheader', { name: '状态' })).toBeVisible()
+  await browserExpect(table.getByRole('cell', { name: '待验证' })).toBeVisible()
+  await browserExpect(page.getByRole('heading', { name: '建议' })).toBeVisible()
+  await browserExpect(page.getByRole('table', { name: '后续计划' })).toBeVisible()
+  await page.setViewportSize({ height: 844, width: 390 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  const scroll = page.getByRole('region', { name: '后续计划' })
+  expect(await scroll.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true)
+  await scroll.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(() => scroll.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0)
+  if (process.env.WEB_SCREENSHOTS) {
+    await page.screenshot({ fullPage: true, path: join(process.env.WEB_SCREENSHOTS, 'openui-mobile.png') })
+  }
+  adapter.finish(runId, { status: 'succeeded' })
+  await browserExpect(page.getByText('已完成', { exact: true })).toBeVisible()
+  await page.reload()
+  await browserExpect(table.getByRole('cell', { exact: true, name: '方案 A' })).toBeVisible()
+  expect(await page.locator('caption, h3').allTextContents()).toEqual(['候选方案', '建议', '后续计划'])
+  expect(adapter.executions.size).toBe(1)
+}, 30000)
+
+test.each([
+  ['trailing prose', 'root = Card("摘要", "内容")\n不应静默丢失的文字'],
+  ['duplicate root', 'root = Card("摘要", "第一张")\nroot = Card("摘要", "第二张")'],
+  ['unknown component', 'root = Unknown("不可用")'],
+  ['invalid property', 'root = Card(123, "内容")'],
+  ['unresolved reference', 'root = Card("引用", missing)'],
+  ['malformed syntax', 'root = Card(title: "错误", body: "内容")'],
+  ['incomplete expression', 'root = Card("未完成", "内容'],
+  ['discarded content', 'root = Card("摘要", "部分内容")\nextra = Card("丢失", "不得隐藏")'],
+  ['uneven table', 'root = Table("错误表格", ["甲", "乙"], [["缺一格"]])'],
+  ['query', 'data = Query("fetch", {url: "https://example.com"})\nroot = Card("查询", "禁止执行")'],
+  ['mutation', 'data = Mutation("remove", {})\nroot = Card("操作", "禁止执行")'],
+  ['state', '$count = 1\nroot = Card("状态", "禁止执行")']
+])(
+  'keeps the source of %s readable without losing adjacent messages',
+  async (_, source) => {
+    await createProject('Fallback')
+    await createSession('Invalid content')
+    await page.getByLabel('消息').fill('检查异常内容')
+    await page.getByRole('button', { exact: true, name: '发送' }).click()
+    await expect.poll(() => adapter.executions.size).toBe(1)
+    const runId = [...adapter.executions.keys()][0]!
+    await adapter.push(runId, {
+      event: parseEvent({ messageId: 'bad', role: 'assistant', type: 'TEXT_MESSAGE_START' }),
+      kind: 'event'
+    })
+    await adapter.push(runId, {
+      event: parseEvent({
+        delta: `之前\n\n\`\`\`openui\n${source}\n\`\`\`\n\n\`\`\`openui\nroot = Card("仍可用", "后续内容")\n\`\`\``,
+        messageId: 'bad',
+        type: 'TEXT_MESSAGE_CONTENT'
+      }),
+      kind: 'event'
+    })
+    adapter.finish(runId, { status: 'succeeded' })
+    await browserExpect(page.getByText('已完成', { exact: true })).toBeVisible()
+    await browserExpect(page.getByText('富内容无法完整显示，已保留原文。')).toBeVisible()
+    await browserExpect(page.locator('pre').filter({ hasText: source })).toBeVisible()
+    await browserExpect(page.getByRole('heading', { name: '仍可用' })).toBeVisible()
+    await browserExpect(page.getByLabel('消息')).toBeEnabled()
+    expect(adapter.executions.size).toBe(1)
+  },
+  30000
+)
+
+test.each(['succeeded', 'failed', 'cancelled'] as const)(
+  'preserves an unclosed UI block after a %s run',
+  async (status) => {
+    await createProject('Interrupted UI')
+    await createSession('Unclosed fence')
+    await page.getByLabel('消息').fill('生成摘要')
+    await page.getByRole('button', { exact: true, name: '发送' }).click()
+    await expect.poll(() => adapter.executions.size).toBe(1)
+    const runId = [...adapter.executions.keys()][0]!
+    await adapter.push(runId, {
+      event: parseEvent({ messageId: 'partial', role: 'assistant', type: 'TEXT_MESSAGE_START' }),
+      kind: 'event'
+    })
+    const source = 'root = Card("临时摘要", "已收到的内容")'
+    await adapter.push(runId, {
+      event: parseEvent({ delta: `\`\`\`openui\n${source}\n`, messageId: 'partial', type: 'TEXT_MESSAGE_CONTENT' }),
+      kind: 'event'
+    })
+    await browserExpect(page.getByRole('heading', { name: '临时摘要' })).toBeVisible()
+    if (status === 'cancelled') {
+      await page.getByRole('button', { exact: true, name: '取消运行' }).click()
+    } else {
+      adapter.finish(runId, { status })
+    }
+    await browserExpect(page.getByText('富内容无法完整显示，已保留原文。')).toBeVisible()
+    await browserExpect(page.locator('pre').filter({ hasText: source })).toBeVisible()
+    await page.reload()
+    await browserExpect(page.locator('pre').filter({ hasText: source })).toBeVisible()
+    expect(adapter.executions.size).toBe(1)
+  },
+  30000
+)
+
+test('reconnects while a table is streaming without repeating its rows or the run', async () => {
+  await createProject('Recover table')
+  await createSession('Streaming table')
+  await page.getByLabel('消息').fill('列出结果')
+  await page.getByRole('button', { exact: true, name: '发送' }).click()
+  await expect.poll(() => adapter.executions.size).toBe(1)
+  const runId = [...adapter.executions.keys()][0]!
+  await adapter.push(runId, {
+    event: parseEvent({ messageId: 'table', role: 'assistant', type: 'TEXT_MESSAGE_START' }),
+    kind: 'event'
+  })
+  await adapter.push(runId, {
+    event: parseEvent({
+      delta: '```openui\nroot = Table("恢复结果", ["名称"], [["第一行"]',
+      messageId: 'table',
+      type: 'TEXT_MESSAGE_CONTENT'
+    }),
+    kind: 'event'
+  })
+  await browserExpect(page.getByRole('cell', { name: '第一行' })).toBeVisible()
+  streams.get(runId)?.destroy()
+  for (const delta of [', ["第二', '行"]])\n```']) {
+    await adapter.push(runId, {
+      event: parseEvent({ delta, messageId: 'table', type: 'TEXT_MESSAGE_CONTENT' }),
+      kind: 'event'
+    })
+  }
+  await browserExpect(page.getByRole('cell', { name: '第二行' })).toBeVisible()
+  expect(cursors.some((cursor) => cursor > 0)).toBe(true)
+  adapter.finish(runId, { status: 'succeeded' })
+  await browserExpect(page.getByText('已完成', { exact: true })).toBeVisible()
+  await page.reload()
+  await browserExpect(page.getByRole('cell', { name: '第一行' })).toHaveCount(1)
+  await browserExpect(page.getByRole('cell', { name: '第二行' })).toHaveCount(1)
+  expect(adapter.executions.size).toBe(1)
+}, 30000)
+
+test('renders untrusted strings as text and never treats user or tool content as UI', async () => {
+  await createProject('Read-only UI')
+  await createSession('Safe content')
+  const source = '```openui\nroot = Card("用户内容", "不应渲染")\n```'
+  await page.getByLabel('消息').fill(source)
+  await page.getByRole('button', { exact: true, name: '发送' }).click()
+  await expect.poll(() => adapter.executions.size).toBe(1)
+  const runId = [...adapter.executions.keys()][0]!
+  const requests: string[] = []
+  page.on('request', (request) => {
+    if (!request.url().startsWith(origin)) {
+      requests.push(request.url())
+    }
+  })
+  for (const event of [
+    { messageId: 'user', role: 'user', type: 'TEXT_MESSAGE_START' },
+    { delta: source, messageId: 'user', type: 'TEXT_MESSAGE_CONTENT' },
+    { messageId: 'user', type: 'TEXT_MESSAGE_END' },
+    { toolCallId: 'tool', toolCallName: 'result', type: 'TOOL_CALL_START' },
+    { delta: '{}', toolCallId: 'tool', type: 'TOOL_CALL_ARGS' },
+    { toolCallId: 'tool', type: 'TOOL_CALL_END' },
+    { content: source, messageId: 'tool-message', role: 'tool', toolCallId: 'tool', type: 'TOOL_CALL_RESULT' },
+    { messageId: 'safe', role: 'assistant', type: 'TEXT_MESSAGE_START' },
+    {
+      delta:
+        '```openui\nroot = Card("安全展示", "<img src=https://example.com/track onerror=alert(1)><script>alert(1)</script>")\n```\n\n```js\nroot = Card("代码示例", "不渲染")\n```',
+      messageId: 'safe',
+      type: 'TEXT_MESSAGE_CONTENT'
+    }
+  ]) {
+    await adapter.push(runId, { event: parseEvent(event), kind: 'event' })
+  }
+  adapter.finish(runId, { status: 'succeeded' })
+  await browserExpect(page.getByText('已完成', { exact: true })).toBeVisible()
+  await browserExpect(page.getByRole('heading', { name: '安全展示' })).toBeVisible()
+  await browserExpect(
+    page.getByText('<img src=https://example.com/track onerror=alert(1)><script>alert(1)</script>', { exact: true })
+  ).toBeVisible()
+  await browserExpect(page.getByRole('heading', { name: '用户内容' })).toHaveCount(0)
+  await browserExpect(page.getByRole('heading', { name: '代码示例' })).toHaveCount(0)
+  await browserExpect(page.locator('.markdown img, .markdown script')).toHaveCount(0)
+  expect(requests).toEqual([])
+  expect(adapter.executions.size).toBe(1)
 }, 30000)

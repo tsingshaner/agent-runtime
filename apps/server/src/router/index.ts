@@ -9,7 +9,7 @@ import type { ManagerOptions, RuntimeManager } from '@qingshaner/runtime'
 
 import { safeError } from '../error.ts'
 
-export interface ServiceOptions extends ManagerOptions {
+export interface ServiceOptions extends Omit<ManagerOptions, 'instructions'> {
   defaultModel?: string
   memoryCore?: MemoryCoreService
 }

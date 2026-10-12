@@ -15,6 +15,7 @@ allowBuilds:
   '@biomejs/biome': true
   '@deepseek-ai/dsh-subprocess-local': false
   '@google/genai': false
+  '@openuidev/lang-core': false
   better-sqlite3: true
   esbuild: true
   koffi: false

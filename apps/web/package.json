@@ -6,7 +6,8 @@
     "dev": "node scripts/openui-prompt.ts && vite --host 127.0.0.1",
     "build": "node scripts/openui-prompt.ts && vite build",
     "check:type": "tsc --noEmit -p tsconfig.json",
-    "smoke": "node --experimental-strip-types smoke.ts"
+    "smoke": "node --experimental-strip-types smoke.ts",
+    "smoke:https": "node https-smoke.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

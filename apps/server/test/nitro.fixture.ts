@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { readFile } from 'node:fs/promises'
+import { request } from 'node:http'
 import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -64,8 +65,21 @@ export const launchNitro = async (directory: string, environment: NodeJS.Process
       try {
         const token = await readFile(join(directory, 'http-token'), 'utf8')
         const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
-        const response = await fetch(`${url}/health`, { headers, signal: AbortSignal.timeout(500) })
-        if (response.ok) {
+        const readinessHeaders = environment.RUNTIME_PUBLIC_ORIGIN
+          ? { ...headers, host: new URL(environment.RUNTIME_PUBLIC_ORIGIN).host }
+          : headers
+        const ready = await new Promise<boolean>((resolve, reject) => {
+          const probe = request(
+            `${url}/health`,
+            { headers: readinessHeaders, signal: AbortSignal.timeout(500) },
+            (response) => {
+              response.resume()
+              resolve(response.statusCode === 200)
+            }
+          )
+          probe.on('error', reject).end()
+        })
+        if (ready) {
           return { close, headers, token, url }
         }
       } catch {

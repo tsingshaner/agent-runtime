@@ -5,17 +5,17 @@ import { join } from 'node:path'
 
 import { chromium, expect } from '@playwright/test'
 
-import { launchNitro } from '../server/test/nitro.fixture.ts'
+import { launchHttpsNitro } from './test/https.fixture.ts'
 
 if (process.env.RUN_REAL_CODEX !== '1' || !process.env.CODEX_MODEL) {
   process.stdout.write('UNVERIFIED: set RUN_REAL_CODEX=1 and CODEX_MODEL to run the real browser/Codex smoke.\n')
 } else {
   const directory = await mkdtemp(join(tmpdir(), 'web-codex-smoke-'))
-  const server = await launchNitro(directory, { CODEX_MODEL: process.env.CODEX_MODEL })
+  const server = await launchHttpsNitro(directory, { CODEX_MODEL: process.env.CODEX_MODEL })
   try {
     const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL, headless: true })
     try {
-      const page = await browser.newPage()
+      const page = await browser.newPage({ ignoreHTTPSErrors: true })
       await page.goto(server.url)
       await page.getByLabel('访问令牌').fill(server.token)
       await page.getByRole('button', { name: '进入工作台' }).click()
@@ -48,7 +48,7 @@ if (process.env.RUN_REAL_CODEX !== '1' || !process.env.CODEX_MODEL) {
       await expect(page.getByRole('heading', { exact: true, name: '发布摘要' })).toBeVisible()
       await expect(page.getByRole('table', { name: '方案比较' }).getByRole('cell', { name: '方案 A' })).toBeVisible()
       process.stdout.write(
-        'PASS: real Codex text, OpenUI card/table generation and browser history recovery. UNVERIFIED: real tools, approvals and resources.\n'
+        'PASS: built Nitro over local HTTPS, real Codex text, OpenUI card/table generation and browser history recovery. UNVERIFIED: real tools, approvals and resources.\n'
       )
     } finally {
       await browser.close()

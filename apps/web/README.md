@@ -113,7 +113,7 @@ pnpm --filter @internal/server build
 RUN_REAL_CODEX=1 CODEX_MODEL=your-model pnpm --filter @internal/web smoke
 ```
 
-真实冒烟从网页登录、创建项目/会话、发送文本并刷新验证历史。未启用时输出 UNVERIFIED；
+真实冒烟将构建产物置于本机 HTTPS 代理后，从网页登录、创建项目/会话、发送文本并刷新验证历史。未启用时输出 UNVERIFIED；
 工具、审批与资源的真实模型行为仍按实际触发情况单独记录，受控测试不能替代该验证。
 
 ## OpenUI 只读回复
@@ -193,3 +193,20 @@ Memory Write 独立展示项目内 Run/Session 来源、状态和原因：等待
 等待记录定期刷新查询，其余状态可手动刷新。浏览器回归连接真实服务及受控 Memory HTTP
 服务，覆盖查询、分页、搜索、删除、隔离和错误状态；通过服务 API 生成成功 Run 验证写入边界，
 并用持久化等待记录验证恢复展示，不调用真实模型。
+
+## 完整部署验收
+
+```sh
+pnpm build
+pnpm --filter @internal/server build
+pnpm --filter @internal/web smoke:https
+RUN_REAL_CODEX=1 CODEX_MODEL=your-model pnpm --filter @internal/web smoke
+pnpm exec vitest run --project @internal/web
+```
+
+HTTPS smoke 用 OpenSSL 生成一天有效的临时自签证书，在回环地址终止 TLS，代理保留
+Host/Origin，不缓冲事件流。只在该测试浏览器允许自签证书，不改变系统信任；临时目录、
+令牌、证书和进程在结束时清理。生产继续采用上文的可信证书和公开域名配置。
+HTTPS smoke 不调用模型，检查登录 Cookie、保护接口、四类资源、刷新、手机键盘和退出。
+真实 Codex smoke 使用现有服务端 Codex 身份，会调用模型；环境变量必须显式启用。
+本次证据及限制见 [完整验收记录](../../docs/verification/web-workbench.md)。

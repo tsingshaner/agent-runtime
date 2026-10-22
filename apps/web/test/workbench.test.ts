@@ -33,6 +33,7 @@ let mcp: Mcp
 let resumeError: RuntimeError | undefined
 const streams = new Map<string, ServerResponse>()
 const cursors: number[] = []
+const configuredSkills: string[][] = []
 const server = createServer(async (incoming, outgoing) => {
   const stop = new AbortController()
   outgoing.on('close', () => stop.abort())
@@ -107,7 +108,10 @@ const openService = async (memory?: ProjectMemory) =>
     runtimes: [
       {
         cancel: adapter.cancel.bind(adapter),
-        configureProject: () => Promise.resolve(),
+        configureProject: (_projectId, snapshot) => {
+          configuredSkills.push(snapshot.skillDirectories)
+          return Promise.resolve()
+        },
         createSession: adapter.createSession.bind(adapter),
         dispose: adapter.dispose.bind(adapter),
         execute: adapter.execute.bind(adapter),
@@ -130,6 +134,7 @@ beforeEach(async () => {
   mcp = await Mcp.open(join(directory, 'mcp'))
   adapter = new ManualAdapter()
   cursors.length = 0
+  configuredSkills.length = 0
   streams.clear()
   resumeError = undefined
   service = await openService()
@@ -1464,3 +1469,82 @@ describe('Memory management through the real service', () => {
     }
   }, 30000)
 })
+
+test('completes the resource update workflow across controls, logout and the next run', async () => {
+  const source = join(directory, 'workflow-skill')
+  await mkdir(source)
+  await writeFile(
+    join(source, 'SKILL.md'),
+    '---\nname: workflow-helper\ndescription: Workflow acceptance\n---\nNew binding'
+  )
+  await createProject('Complete workflow')
+  await page.getByRole('link', { name: '技能管理' }).click()
+  await page.getByLabel('服务端技能目录').fill(source)
+  await page.getByRole('button', { exact: true, name: '导入技能' }).click()
+  await browserExpect(page.getByText('技能已导入受管理副本。')).toBeVisible()
+  await page.getByRole('link', { name: '会话工作台' }).click()
+  await createSession('Workflow session')
+  const sessionId = new URL(page.url()).searchParams.get('session')!
+  await page.getByLabel('消息').fill('approval during update')
+  await page.getByRole('button', { exact: true, name: '发送' }).click()
+  await expect.poll(() => adapter.executions.size).toBe(1)
+  const runId = [...adapter.executions.keys()][0]!
+  expect(configuredSkills.at(-1)).toEqual([])
+  await adapter.push(runId, {
+    kind: 'approval',
+    request: {
+      allowedDecisions: ['approve', 'deny'],
+      detail: { command: 'echo accepted' },
+      kind: 'command',
+      nativeRequestId: 'workflow-approval'
+    }
+  })
+  await page.getByRole('link', { name: '技能管理' }).click()
+  await page.getByRole('button', { name: '绑定并启用' }).click()
+  await browserExpect(page.getByRole('status').filter({ hasText: '正在提交技能变更' })).toBeVisible()
+  const blocked = await page.request.post(`${origin}/sessions/${sessionId}/runs`, {
+    data: { text: 'must not queue' },
+    headers: { origin }
+  })
+  expect(await blocked.json()).toMatchObject({ data: { code: 'RESOURCES_UPDATING' } })
+  await page.getByRole('link', { name: '会话工作台' }).click()
+  await page.getByRole('button', { exact: true, name: '批准' }).click()
+  await expect.poll(() => adapter.decisions.length).toBe(1)
+  await adapter.push(runId, {
+    kind: 'input',
+    request: {
+      nativeRequestId: 'workflow-input',
+      questions: [{ header: '目标', id: 'target', question: '工作流目标' }]
+    }
+  })
+  await page.setViewportSize({ height: 844, width: 390 })
+  await page.getByLabel('工作流目标').fill('continue safely')
+  await page.getByRole('button', { name: '提交补充输入' }).focus()
+  await page.keyboard.press('Enter')
+  await expect.poll(() => adapter.answers.length).toBe(1)
+  await page.getByRole('button', { name: '退出登录' }).click()
+  await browserExpect(page.getByLabel('访问令牌')).toBeVisible()
+  expect(adapter.cancelled).toEqual([])
+  expect((await page.request.get(`${origin}/runs/${runId}`)).status()).toBe(401)
+  await browserExpect(page.getByRole('button', { exact: true, name: '取消运行' })).toHaveCount(0)
+  await page.getByLabel('访问令牌').fill(service.token)
+  await page.getByRole('button', { name: '进入工作台' }).click()
+  await page.getByRole('button', { exact: true, name: '取消运行' }).click()
+  await browserExpect(page.getByText('已取消', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: '技能管理' }).click()
+  await browserExpect(page.getByRole('article', { name: '项目技能 workflow-helper' })).toContainText('已启用')
+  await page.getByRole('link', { name: '会话工作台' }).click()
+  await page.getByLabel('消息').fill('use new binding')
+  await page.getByRole('button', { exact: true, name: '发送' }).click()
+  await expect.poll(() => adapter.executions.size).toBe(2)
+  expect(configuredSkills.at(-1)).toHaveLength(1)
+  expect(await readFile(join(configuredSkills.at(-1)![0]!, 'SKILL.md'), 'utf8')).toContain('workflow-helper')
+  const next = [...adapter.executions.keys()].find((id) => id !== runId)!
+  adapter.finish(next, { finalReply: 'new resources accepted', status: 'succeeded' })
+  await browserExpect(page.getByText('已完成', { exact: true })).toBeVisible()
+  await page.getByRole('button', { exact: true, name: '归档会话' }).click()
+  await page.reload()
+  await browserExpect(page.getByRole('button', { exact: true, name: '恢复会话' })).toBeVisible()
+  await page.getByRole('button', { exact: true, name: '恢复会话' }).click()
+  await browserExpect(page.getByLabel('消息')).toBeEnabled()
+}, 30000)

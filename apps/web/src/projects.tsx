@@ -4,6 +4,7 @@ import { useState } from 'react'
 
 import { api } from './api'
 import { CreateProjectFeature } from './create-project'
+import { KnowledgeFeature } from './knowledge'
 import { McpFeature } from './mcp'
 import { Route } from './routes/workspace'
 import { SessionFeature } from './sessions'
@@ -130,7 +131,7 @@ const ProjectDetail = ({ project }: { project: string }) => {
           {path}
         </p>
       ))}
-      <nav aria-label="项目页面" className="mt-6 flex gap-4">
+      <nav aria-label="项目页面" className="mt-6 flex flex-wrap gap-4">
         <Link aria-current={!view ? 'page' : undefined} search={{ project, session }} to="/workspace">
           会话工作台
         </Link>
@@ -148,11 +149,20 @@ const ProjectDetail = ({ project }: { project: string }) => {
         >
           MCP 管理
         </Link>
+        <Link
+          aria-current={view === 'knowledge' ? 'page' : undefined}
+          search={{ project, session, view: 'knowledge' }}
+          to="/workspace"
+        >
+          知识管理
+        </Link>
       </nav>
       {view === 'skills' ? (
         <SkillsFeature projectId={project} />
       ) : view === 'mcp' ? (
         <McpFeature projectId={project} />
+      ) : view === 'knowledge' ? (
+        <KnowledgeFeature key={project} projectId={project} />
       ) : (
         <SessionFeature project={selected.data} />
       )}

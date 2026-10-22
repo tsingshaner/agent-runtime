@@ -1,6 +1,6 @@
 // cspell:ignore enui
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { extname, join, resolve } from 'node:path'
@@ -8,6 +8,7 @@ import { Readable } from 'node:stream'
 
 import type { ServerResponse } from 'node:http'
 import { expect as browserExpect, chromium } from '@playwright/test'
+import { Knowledge } from '@qingshaner/knowledge'
 import { Mcp } from '@qingshaner/mcp'
 import { ProjectResources, parseEvent, RuntimeError } from '@qingshaner/runtime'
 import { Skills } from '@qingshaner/skill'
@@ -95,7 +96,11 @@ const openService = async () =>
     dataDir: directory,
     defaultModel: 'deployment-model',
     origin,
-    resources: new ProjectResources({ mcp, skills: await Skills.open(join(directory, 'managed-skills')) }),
+    resources: new ProjectResources({
+      knowledge: await Knowledge.open(join(directory, 'knowledge')),
+      mcp,
+      skills: await Skills.open(join(directory, 'managed-skills'))
+    }),
     runtimes: [
       {
         cancel: adapter.cancel.bind(adapter),
@@ -1143,3 +1148,139 @@ test('MCP updates remain pending until confirmed and preserve input on failure',
   await browserExpect(page.getByRole('alert').filter({ hasText: '绑定变更失败' })).toBeVisible()
   await browserExpect(page.getByText('本项目尚未绑定 MCP 服务。')).toBeVisible()
 }, 30000)
+
+describe('Knowledge management through the real service', () => {
+  test('binds existing directories and safely creates, edits, searches and deletes project documents', async () => {
+    page.setDefaultTimeout(5000)
+    const root = join(directory, 'notes')
+    await mkdir(root)
+    await createProject('Knowledge Alpha')
+    await page.getByRole('link', { name: '知识管理' }).click()
+    await browserExpect(page.getByText('本项目尚未绑定知识目录。', { exact: false })).toBeVisible()
+    await page.getByLabel('服务端知识目录').fill(join(directory, 'missing'))
+    await page.getByRole('button', { name: '绑定知识目录' }).click()
+    await browserExpect(page.getByRole('alert').filter({ hasText: '绑定失败' })).toBeVisible()
+    await expect(stat(join(directory, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await page.getByLabel('服务端知识目录').fill(root)
+    await page.getByRole('button', { name: '绑定知识目录' }).click()
+    await browserExpect(page.getByText('知识目录中暂无 Markdown 文档。')).toBeVisible()
+    await page.getByRole('button', { name: '新建文档' }).click()
+    await page.getByLabel('文档相对路径（.md）').fill('guide.md')
+    const source =
+      '# Knowledge guide\n\nneedle <script>window.attacked=1</script> [bad](javascript:alert(1)) ![remote](https://invalid.example/pixel)'
+    await page.getByLabel('Markdown 内容').fill(source)
+    await page.getByRole('button', { name: '保存文档' }).focus()
+    await page.keyboard.press('Enter')
+    await browserExpect(page.getByRole('button', { exact: true, name: 'guide.md' })).toBeVisible()
+    expect(await readFile(join(root, 'guide.md'), 'utf8')).toBe(source)
+    const preview = page.getByRole('region', { name: 'Markdown 预览' })
+    await browserExpect(preview.getByRole('heading', { name: 'Knowledge guide' })).toBeVisible()
+    expect(await preview.locator('script, img, a[href^="javascript:"]').count()).toBe(0)
+    await page.getByLabel('关键词').fill('needle')
+    await page.getByRole('button', { name: '搜索知识' }).click()
+    const results = page.getByRole('region', { name: '搜索结果' })
+    await browserExpect(results).toContainText('<script>window.attacked=1</script>')
+    expect(await results.locator('script, img, a').count()).toBe(0)
+    await page.getByLabel('关键词').fill('')
+    await page.getByRole('button', { name: '搜索知识' }).click()
+    await page.getByLabel('Markdown 内容').fill('# Revised\n\nneedle revised')
+    await page.getByRole('button', { name: '保存文档' }).click()
+    await browserExpect(page.getByText('文档已保存。')).toBeVisible()
+    expect(await readFile(join(root, 'guide.md'), 'utf8')).toBe('# Revised\n\nneedle revised')
+    await page.getByLabel('关键词').fill('absent')
+    await page.getByRole('button', { name: '搜索知识' }).click()
+    await browserExpect(page.getByText('没有匹配的文档。')).toBeVisible()
+    await page.getByLabel('关键词').fill('needle')
+    await page.getByRole('button', { name: '搜索知识' }).click()
+    await browserExpect(page.getByRole('region', { name: '搜索结果' })).toContainText('needle revised')
+    const alphaUrl = page.url()
+    await createProject('Knowledge Beta')
+    await page.getByRole('link', { name: '知识管理' }).click()
+    await browserExpect(page.getByText('本项目尚未绑定知识目录。', { exact: false })).toBeVisible()
+    await browserExpect(page.getByRole('button', { exact: true, name: 'guide.md' })).toHaveCount(0)
+    await page.goto(alphaUrl)
+    await page.getByRole('button', { exact: true, name: 'guide.md' }).click()
+    await browserExpect(preview).toContainText('Revised')
+    page.once('dialog', (dialog) => dialog.accept())
+    await page.getByRole('button', { name: '删除文档' }).click()
+    await browserExpect(page.getByText('知识目录中暂无 Markdown 文档。')).toBeVisible()
+    await browserExpect(preview).toHaveCount(0)
+    await expect(readFile(join(root, 'guide.md'))).rejects.toThrow()
+    await page.setViewportSize({ height: 844, width: 390 })
+    await page.getByRole('button', { name: '新建文档' }).click()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.getByLabel('文档相对路径（.md）').fill('mobile.md')
+    await page.getByLabel('Markdown 内容').fill('# Mobile note')
+    await page.getByRole('button', { name: '保存文档' }).click()
+    await browserExpect(page.getByRole('button', { exact: true, name: 'mobile.md' })).toBeVisible()
+    await browserExpect(preview.getByRole('heading', { name: 'Mobile note' })).toBeVisible()
+    expect(await readFile(join(root, 'mobile.md'), 'utf8')).toBe('# Mobile note')
+  }, 30000)
+
+  test('retains failed edits and rejects escaping paths and symbolic links', async () => {
+    const root = join(directory, 'notes')
+    await mkdir(root)
+    await writeFile(join(root, 'existing.md'), 'original')
+    await writeFile(join(directory, 'outside.md'), 'outside')
+    await symlink(join(directory, 'outside.md'), join(root, 'link.md'))
+    await createProject('Knowledge Boundary')
+    await page.getByRole('link', { name: '知识管理' }).click()
+    await page.getByLabel('服务端知识目录').fill(root)
+    await page.getByRole('button', { name: '绑定知识目录' }).click()
+    await page.getByRole('button', { exact: true, name: 'existing.md' }).click()
+    await browserExpect(page.getByLabel('Markdown 内容')).toHaveValue('original')
+    await page.getByLabel('Markdown 内容').fill('unsaved draft')
+    await page.route('**/knowledge/documents', (route) =>
+      route.request().method() === 'PATCH' ? route.abort() : route.continue()
+    )
+    await page.getByRole('button', { name: '保存文档' }).click()
+    await browserExpect(page.getByRole('alert').filter({ hasText: '保存失败' })).toBeVisible()
+    await browserExpect(page.getByLabel('Markdown 内容')).toHaveValue('unsaved draft')
+    await browserExpect(page.getByText('文档已保存。')).toHaveCount(0)
+    expect(await readFile(join(root, 'existing.md'), 'utf8')).toBe('original')
+    await page.unroute('**/knowledge/documents')
+    await page.getByRole('button', { name: '保存文档' }).click()
+    await browserExpect(page.getByText('文档已保存。')).toBeVisible()
+    await page.getByRole('button', { name: '新建文档' }).click()
+    await page.getByLabel('Markdown 内容').fill('must not escape')
+    for (const path of ['../outside.md', 'link.md', 'not-markdown.txt']) {
+      await page.getByLabel('文档相对路径（.md）').fill(path)
+      await page.getByRole('button', { name: '保存文档' }).click()
+      await browserExpect(page.getByRole('alert').filter({ hasText: '保存失败' })).toBeVisible()
+      await browserExpect(page.getByLabel('Markdown 内容')).toHaveValue('must not escape')
+      expect(await readFile(join(directory, 'outside.md'), 'utf8')).toBe('outside')
+    }
+  }, 30000)
+
+  test('keeps binding pending across navigation while an active run can be cancelled', async () => {
+    const root = join(directory, 'notes')
+    await mkdir(root)
+    const nextRoot = join(directory, 'next-notes')
+    await mkdir(nextRoot)
+    await createProject('Knowledge Pending')
+    await page.getByRole('link', { name: '知识管理' }).click()
+    await page.getByLabel('服务端知识目录').fill(root)
+    await page.getByRole('button', { name: '绑定知识目录' }).click()
+    await browserExpect(page.getByText('知识目录中暂无 Markdown 文档。')).toBeVisible()
+    await page.getByRole('link', { name: '会话工作台' }).click()
+    await createSession('Knowledge waiting')
+    await page.getByLabel('消息').fill('wait for binding')
+    await page.getByRole('button', { exact: true, name: '发送' }).click()
+    await expect.poll(() => adapter.executions.size).toBe(1)
+    await page.getByRole('link', { name: '知识管理' }).click()
+    await page.getByRole('button', { name: '新建文档' }).click()
+    await page.getByLabel('文档相对路径（.md）').fill('old-directory.md')
+    await page.getByLabel('Markdown 内容').fill('old directory draft')
+    await page.getByLabel('服务端知识目录').fill(nextRoot)
+    await page.getByRole('button', { name: '绑定知识目录' }).click()
+    await browserExpect(page.getByRole('status').filter({ hasText: '正在提交知识绑定' })).toBeVisible()
+    await browserExpect(page.getByRole('button', { name: '保存文档' })).toBeDisabled()
+    await page.getByRole('link', { name: '会话工作台' }).click()
+    await page.getByRole('link', { name: '知识管理' }).click()
+    await browserExpect(page.getByRole('status').filter({ hasText: '正在提交知识绑定' })).toBeVisible()
+    await page.getByRole('link', { name: '会话工作台' }).click()
+    await page.getByRole('button', { name: '取消运行' }).click()
+    await page.getByRole('link', { name: '知识管理' }).click()
+    await browserExpect(page.getByText('知识目录中暂无 Markdown 文档。')).toBeVisible()
+  }, 30000)
+})

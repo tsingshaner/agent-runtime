@@ -8,12 +8,14 @@ import { Readable } from 'node:stream'
 
 import type { ServerResponse } from 'node:http'
 import { expect as browserExpect, chromium } from '@playwright/test'
+import { Mcp } from '@qingshaner/mcp'
 import { ProjectResources, parseEvent, RuntimeError } from '@qingshaner/runtime'
 import { Skills } from '@qingshaner/skill'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import type { Browser, Page } from '@playwright/test'
 
+import { createMcpHttpPeer } from '../../../packages/mcp/test/http.fixture'
 import { SessionStore } from '../../../packages/runtime/src/store'
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
 import { openTestService } from '../../server/test/service.fixture'
@@ -24,6 +26,7 @@ let directory: string
 let service: Awaited<ReturnType<typeof openTestService>>
 let origin: string
 let adapter: ManualAdapter
+let mcp: Mcp
 let resumeError: RuntimeError | undefined
 const streams = new Map<string, ServerResponse>()
 const cursors: number[] = []
@@ -92,7 +95,7 @@ const openService = async () =>
     dataDir: directory,
     defaultModel: 'deployment-model',
     origin,
-    resources: new ProjectResources({ skills: await Skills.open(join(directory, 'managed-skills')) }),
+    resources: new ProjectResources({ mcp, skills: await Skills.open(join(directory, 'managed-skills')) }),
     runtimes: [
       {
         cancel: adapter.cancel.bind(adapter),
@@ -116,6 +119,7 @@ const openService = async () =>
 
 beforeEach(async () => {
   directory = await realpath(await mkdtemp(join(tmpdir(), 'web-workbench-')))
+  mcp = await Mcp.open(join(directory, 'mcp'))
   adapter = new ManualAdapter()
   cursors.length = 0
   streams.clear()
@@ -132,6 +136,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await page.close()
   await service.close()
+  await mcp.dispose()
   await rm(directory, { force: true, recursive: true })
 })
 
@@ -831,6 +836,7 @@ test('opens persisted interrupted history in a new service without replaying nat
     parseEvent({ delta: 'persisted answer', messageId: 'saved', type: 'TEXT_MESSAGE_CONTENT' })
   )
   await store.close()
+  mcp = await Mcp.open(join(directory, 'mcp'))
   adapter = new ManualAdapter()
   service = await openService()
 
@@ -982,3 +988,158 @@ describe('skill management through the real service', () => {
     await browserExpect(page.getByRole('article', { name: '共享技能 waiting-helper' })).toBeVisible()
   }, 30000)
 })
+
+describe('MCP management through the real service', () => {
+  test('creates and edits stdio configuration, probes tools and isolates project bindings', async () => {
+    page.setDefaultTimeout(5000)
+    await createProject('MCP Alpha')
+    await page.getByRole('link', { name: 'MCP 管理' }).click()
+    await browserExpect(page.getByText('暂无 MCP 配置。')).toBeVisible()
+    await page.getByRole('button', { name: '新建 MCP 配置' }).click()
+    await page.getByLabel('服务名称', { exact: true }).fill('local-tools')
+    await page.getByLabel('启动命令').fill(process.execPath)
+    await page
+      .getByLabel('参数（JSON 数组）')
+      .fill(JSON.stringify([resolve(import.meta.dirname, '../../../packages/mcp/test/server.fixture.ts')]))
+    await page.getByLabel('环境变量引用（JSON 对象）', { exact: true }).fill('{"TOKEN":"literal-secret-value"}')
+    await page.getByRole('button', { exact: true, name: '创建 MCP 服务' }).click()
+    await browserExpect(page.getByRole('alert').filter({ hasText: '值只能填写服务端环境变量名' })).toBeVisible()
+    await page.getByLabel('环境变量引用（JSON 对象）', { exact: true }).fill('{}')
+    await page.getByRole('button', { exact: true, name: '创建 MCP 服务' }).click()
+    const shared = page.getByRole('article', { exact: true, name: '共享 MCP local-tools' })
+    await browserExpect(shared).toBeVisible()
+    await shared.getByRole('button', { name: '检测连接' }).click()
+    await browserExpect(shared.getByRole('status')).toHaveText('连接成功，发现 1 个工具。')
+    await browserExpect(shared.getByRole('list', { name: '发现的工具' })).toContainText('echo')
+    await shared.getByRole('button', { name: '绑定并启用' }).click()
+    const binding = page.getByRole('article', { exact: true, name: '项目 MCP local-tools' })
+    await browserExpect(binding.getByText('已启用', { exact: true })).toBeVisible()
+    const alphaUrl = page.url()
+    await createProject('MCP Beta')
+    await page.getByRole('link', { name: 'MCP 管理' }).click()
+    await browserExpect(page.getByText('本项目尚未绑定 MCP 服务。')).toBeVisible()
+    await shared.getByRole('button', { name: '绑定并启用' }).click()
+    await browserExpect(binding.getByText('已启用', { exact: true })).toBeVisible()
+    await page.goto(alphaUrl)
+    await binding.getByRole('button', { exact: true, name: '停用' }).click()
+    await browserExpect(binding.getByText('已停用', { exact: true })).toBeVisible()
+    await shared.getByRole('button', { name: '查看和编辑' }).click()
+    await browserExpect(
+      page.getByText('这是共享配置，保存会影响所有绑定项目；有活动运行时将等待其结束。')
+    ).toBeVisible()
+    await page.getByLabel('服务名称', { exact: true }).fill('renamed-tools')
+    await page.getByRole('button', { name: '保存共享配置' }).focus()
+    await page.keyboard.press('Enter')
+    const renamed = page.getByRole('article', { exact: true, name: '共享 MCP renamed-tools' })
+    await browserExpect(renamed).toBeVisible()
+    await browserExpect(renamed.getByText('连接成功，发现 1 个工具。')).toHaveCount(0)
+    await renamed.getByRole('button', { name: '检测连接' }).click()
+    await browserExpect(renamed.getByRole('status')).toHaveText('连接成功，发现 1 个工具。')
+    await page
+      .getByRole('article', { exact: true, name: '项目 MCP renamed-tools' })
+      .getByRole('button', { name: '解除绑定' })
+      .click()
+    await browserExpect(page.getByText('本项目尚未绑定 MCP 服务。')).toBeVisible()
+    await page.getByRole('link', { exact: true, name: 'MCP Beta' }).click()
+    await page.getByRole('link', { name: 'MCP 管理' }).click()
+    await browserExpect(
+      page.getByRole('article', { exact: true, name: '项目 MCP renamed-tools' }).getByText('已启用', { exact: true })
+    ).toBeVisible()
+    await page.reload()
+    await browserExpect(renamed).toBeVisible()
+    await page.setViewportSize({ height: 844, width: 390 })
+    await renamed.getByRole('button', { name: '查看和编辑' }).click()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }, 30000)
+
+  test('probes HTTP with environment references, reports failures and releases connections', async () => {
+    const peer = await createMcpHttpPeer()
+    process.env.WEB_MCP_AUTH = 'secret-http-token'
+    try {
+      await createProject('HTTP MCP')
+      await page.getByRole('link', { name: 'MCP 管理' }).click()
+      await page.getByRole('button', { name: '新建 MCP 配置' }).click()
+      await page.getByLabel('服务名称', { exact: true }).fill('http-tools')
+      await page.getByLabel('传输方式').selectOption('http')
+      await page.getByLabel('服务 URL').fill(peer.url)
+      await page.getByLabel('请求头环境变量引用（JSON 对象）').fill('{"Authorization":"WEB_MCP_MISSING"}')
+      await page.getByRole('button', { exact: true, name: '创建 MCP 服务' }).click()
+      const shared = page.getByRole('article', { exact: true, name: '共享 MCP http-tools' })
+      await shared.getByRole('button', { name: '检测连接' }).click()
+      await browserExpect(shared.getByRole('alert')).toContainText('缺少服务端环境变量')
+      await browserExpect(shared.getByText('连接成功', { exact: false })).toHaveCount(0)
+      await shared.getByRole('button', { name: '查看和编辑' }).click()
+      await page.getByLabel('请求头环境变量引用（JSON 对象）').fill('{"Authorization":"WEB_MCP_AUTH"}')
+      await page.getByRole('button', { name: '保存共享配置' }).click()
+      await browserExpect(page.getByRole('status').filter({ hasText: '配置已保存' })).toBeVisible()
+      await shared.getByRole('button', { name: '检测连接' }).click()
+      await browserExpect(shared.getByRole('status')).toHaveText('连接成功，发现 1 个工具。')
+      await expect.poll(peer.active).toBe(0)
+      expect(await page.locator('body').innerText()).not.toContain('secret-http-token')
+      expect(JSON.stringify(await mcp.list())).not.toContain('secret-http-token')
+      await page.getByLabel('服务 URL').fill('http://127.0.0.1:1/mcp')
+      await page.getByRole('button', { name: '保存共享配置' }).click()
+      await browserExpect(shared.getByText('Streamable HTTP：http://127.0.0.1:1/mcp')).toBeVisible()
+      await shared.getByRole('button', { name: '检测连接' }).click()
+      await browserExpect(shared.getByRole('alert')).toContainText('连接检测失败')
+      await page.getByLabel('服务 URL').fill(`${peer.url}?token=invalid`)
+      await page.getByRole('button', { name: '保存共享配置' }).click()
+      await browserExpect(page.getByRole('alert').filter({ hasText: '保存失败' })).toBeVisible()
+      await browserExpect(page.getByLabel('服务 URL')).toHaveValue(`${peer.url}?token=invalid`)
+      await browserExpect(shared.getByText('Streamable HTTP：http://127.0.0.1:1/mcp')).toBeVisible()
+    } finally {
+      await peer.close()
+      delete process.env.WEB_MCP_AUTH
+    }
+  }, 30000)
+})
+
+test('MCP updates remain pending until confirmed and preserve input on failure', async () => {
+  page.setDefaultTimeout(5000)
+  await createProject('MCP Pending')
+  await page.getByRole('link', { name: 'MCP 管理' }).click()
+  await page.getByRole('button', { name: '新建 MCP 配置' }).click()
+  await page.getByLabel('服务名称', { exact: true }).fill('pending-tools')
+  await page.getByLabel('传输方式').selectOption('http')
+  await page.getByLabel('服务 URL').fill('http://127.0.0.1:1/mcp')
+  await page.getByRole('button', { exact: true, name: '创建 MCP 服务' }).click()
+  const shared = page.getByRole('article', { exact: true, name: '共享 MCP pending-tools' })
+  await shared.getByRole('button', { name: '查看和编辑' }).click()
+  await page.getByLabel('服务名称', { exact: true }).fill('saved-tools')
+  const gate = Promise.withResolvers<void>()
+  await page.route('**/mcp/*', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.continue()
+    await gate.promise
+    return route.abort()
+  })
+  try {
+    await page.getByRole('button', { name: '保存共享配置' }).click()
+    await browserExpect(page.getByRole('status').filter({ hasText: '正在提交配置' })).toBeVisible()
+    await browserExpect(shared).toBeVisible()
+    await browserExpect(page.getByRole('link', { name: '会话工作台' })).toBeEnabled()
+  } finally {
+    gate.resolve()
+  }
+  await browserExpect(page.getByRole('alert').filter({ hasText: '保存失败' })).toBeVisible()
+  await browserExpect(page.getByLabel('服务名称', { exact: true })).toHaveValue('saved-tools')
+  await page.unroute('**/mcp/*')
+  await page.getByRole('button', { name: '保存共享配置' }).click()
+  const saved = page.getByRole('article', { exact: true, name: '共享 MCP saved-tools' })
+  await browserExpect(saved).toBeVisible()
+  const bindingGate = Promise.withResolvers<void>()
+  await page.route('**/projects/*/mcp/*', async (route) => {
+    await bindingGate.promise
+    await route.abort()
+  })
+  try {
+    await saved.getByRole('button', { name: '绑定并启用' }).click()
+    await browserExpect(page.getByRole('status').filter({ hasText: '正在提交 MCP 绑定变更' })).toBeVisible()
+    await page.getByRole('link', { name: '会话工作台' }).click()
+    await page.getByRole('link', { name: 'MCP 管理' }).click()
+    await browserExpect(page.getByRole('status').filter({ hasText: '正在提交 MCP 绑定变更' })).toBeVisible()
+  } finally {
+    bindingGate.resolve()
+  }
+  await browserExpect(page.getByRole('alert').filter({ hasText: '绑定变更失败' })).toBeVisible()
+  await browserExpect(page.getByText('本项目尚未绑定 MCP 服务。')).toBeVisible()
+}, 30000)

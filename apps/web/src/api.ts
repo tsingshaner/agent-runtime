@@ -24,3 +24,7 @@ export const api: RuntimeContractClient = createORPCClient(link)
 export const bindProjectSkill: RuntimeContractClient['projects']['skills']['bind'] = createORPCClient(link, {
   path: ['projects', 'skills', 'bind']
 })
+
+export const bindProjectMcp: RuntimeContractClient['projects']['mcp']['bind'] = createORPCClient(link, {
+  path: ['projects', 'mcp', 'bind']
+})

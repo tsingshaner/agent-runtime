@@ -4,7 +4,7 @@ React、Vite、TanStack Router/Query、Base UI 与 Tailwind CSS 构建的中文�
 `src/routes/` 使用 TanStack 文件路由，Vite 插件自动生成 `src/routeTree.gen.ts`；生成文件随代码提交，不手工编辑。
 浏览器使用 Better Auth React client；业务 API 使用共享 oRPC 契约。
 当前入口提供登录、项目与会话导航、Codex 流式聊天、历史和归档、工具审批、补充输入及取消。
-已提供 Skill 导入、内容读取和项目绑定；MCP、Knowledge 和 Memory 页面由后续任务实现。
+已提供 Skill 导入、内容读取、MCP 配置和项目绑定；Knowledge 和 Memory 页面由后续任务实现。
 
 ## 构建与启动
 
@@ -35,7 +35,7 @@ RUNTIME_PUBLIC_ORIGIN=http://127.0.0.1:5173 pnpm --filter @internal/server start
 pnpm --filter @internal/web dev
 ```
 
-打开 `http://127.0.0.1:5173`。Vite 将认证、健康检查、项目、会话、运行和技能请求转发到本机 4310，保留浏览器的 Host/Origin。不要将开发服务器公开到公网。
+打开 `http://127.0.0.1:5173`。Vite 将认证、健康检查、项目、会话、运行、技能和 MCP 请求转发到本机 4310，保留浏览器的 Host/Origin。不要将开发服务器公开到公网。
 
 ## 同源 HTTPS
 
@@ -148,3 +148,18 @@ RUN_REAL_CODEX=1 CODEX_MODEL=your-model pnpm --filter @internal/web smoke
 
 浏览器测试使用真实临时目录和服务，覆盖导入失败、文件越界、安全展示、项目隔离、刷新、键盘和窄屏。
 HTTP 资源测试验证活动 Run 期间等待更新且取消仍可用；这些测试不调用真实 Codex。
+
+## MCP 管理
+
+选择项目后打开「MCP 管理」，页面地址保留 `view=mcp`。共享配置支持 stdio 和
+Streamable HTTP；参数使用 JSON 数组，环境变量或请求头映射使用 JSON 对象。
+映射值只能填写服务端环境变量名称，实际凭据由服务端解析；不要把密钥写入启动参数。
+HTTP URL 不允许包含凭据、查询参数或片段。
+
+「检测连接」临时连接服务、发现工具并释放连接，分别提示缺少凭据、超时及连接失败。
+修改共享配置会影响所有绑定项目，修改后需重新检测。项目绑定、启停和解除绑定独立管理，
+有活动 Run 时等待服务端确认，仍可切回会话处理审批或取消；失败时保留输入，不提前显示成功。
+
+浏览器回归使用受控 stdio/HTTP MCP 服务，覆盖创建、编辑、发现工具、连接释放、凭据引用、
+失败状态、项目隔离、键盘和窄屏。HTTP 资源测试验证活动 Run 期间的更新等待与取消。
+这些测试不调用真实 Codex，也不验证外部 MCP 服务的可用性。

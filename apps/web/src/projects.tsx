@@ -4,6 +4,7 @@ import { useState } from 'react'
 
 import { api } from './api'
 import { CreateProjectFeature } from './create-project'
+import { McpFeature } from './mcp'
 import { Route } from './routes/workspace'
 import { SessionFeature } from './sessions'
 import { SkillsFeature } from './skills'
@@ -140,8 +141,21 @@ const ProjectDetail = ({ project }: { project: string }) => {
         >
           技能管理
         </Link>
+        <Link
+          aria-current={view === 'mcp' ? 'page' : undefined}
+          search={{ project, session, view: 'mcp' }}
+          to="/workspace"
+        >
+          MCP 管理
+        </Link>
       </nav>
-      {view === 'skills' ? <SkillsFeature projectId={project} /> : <SessionFeature project={selected.data} />}
+      {view === 'skills' ? (
+        <SkillsFeature projectId={project} />
+      ) : view === 'mcp' ? (
+        <McpFeature projectId={project} />
+      ) : (
+        <SessionFeature project={selected.data} />
+      )}
     </section>
   )
 }

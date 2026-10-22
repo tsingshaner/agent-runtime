@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import { Knowledge } from '@qingshaner/knowledge'
 import { Mcp } from '@qingshaner/mcp'
@@ -176,6 +176,65 @@ test('waits for an active run before applying a skill binding and keeps cancella
     expect(await readFile(join(dir, 'source/SKILL.md'), 'utf8')).toContain('Body')
   } finally {
     await server.close()
+    await rm(dir, { force: true, recursive: true })
+  }
+}, 20000)
+
+test('waits for active runs before replacing shared MCP configuration', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'http-mcp-update-'))
+  const mcp = await Mcp.open(join(dir, 'mcp'))
+  class Adapter extends ManualAdapter {
+    configureProject = () => Promise.resolve()
+  }
+  const adapter = new Adapter()
+  const server = await openTestService({
+    dataDir: join(dir, 'db'),
+    resources: new ProjectResources({ mcp }),
+    runtimes: [adapter]
+  })
+  const request = (path: string, method = 'GET', body?: unknown) =>
+    server.fetch(server.url + path, {
+      headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' },
+      method,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    })
+  try {
+    await request('/projects', 'POST', { id: 'p', name: 'p' })
+    const config = {
+      args: [resolve(import.meta.dirname, '../../../packages/mcp/test/server.fixture.ts')],
+      command: process.execPath,
+      name: 'before',
+      transport: 'stdio'
+    }
+    const entry = (await (await request('/mcp', 'POST', config)).json()) as { id: string }
+    expect((await request(`/projects/p/mcp/${entry.id}`, 'POST', { enabled: true })).status).toBe(200)
+    const session = (await (
+      await request('/sessions', 'POST', { cwd: dir, model: 'test', projectId: 'p', runtime: 'manual' })
+    ).json()) as { id: string }
+    const run = (await (await request(`/sessions/${session.id}/runs`, 'POST', { text: 'working' })).json()) as {
+      runId: string
+    }
+    await adapter.waitStarted(run.runId)
+    let applied = false
+    const updating = request(`/mcp/${entry.id}`, 'PATCH', { ...config, name: 'after' }).then((response) => {
+      applied = true
+      return response
+    })
+    await expect
+      .poll(
+        async () =>
+          (await (await request(`/sessions/${session.id}/runs`, 'POST', { text: 'blocked' })).json()) as unknown
+      )
+      .toMatchObject({ data: { code: 'RESOURCES_UPDATING' } })
+    expect(applied).toBe(false)
+    expect(await (await request(`/mcp/${entry.id}`)).json()).toMatchObject({ name: 'before' })
+    expect((await request(`/runs/${run.runId}/cancel`, 'POST', {})).status).toBe(200)
+    expect((await updating).status).toBe(200)
+    expect(await (await request(`/mcp/${entry.id}`)).json()).toMatchObject({ name: 'after' })
+    expect(await (await request(`/mcp/${entry.id}/probe`, 'POST', {})).json()).toMatchObject([{ name: 'echo' }])
+  } finally {
+    await server.close()
+    await mcp.dispose()
     await rm(dir, { force: true, recursive: true })
   }
 }, 20000)

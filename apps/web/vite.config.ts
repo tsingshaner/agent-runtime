@@ -22,7 +22,8 @@ export default defineConfig({
       '/health': { changeOrigin: false, target: 'http://127.0.0.1:4310' },
       '/projects': { changeOrigin: false, target: 'http://127.0.0.1:4310' },
       '/runs': { changeOrigin: false, target: 'http://127.0.0.1:4310' },
-      '/sessions': { changeOrigin: false, target: 'http://127.0.0.1:4310' }
+      '/sessions': { changeOrigin: false, target: 'http://127.0.0.1:4310' },
+      '/skills': { changeOrigin: false, target: 'http://127.0.0.1:4310' }
     },
     strictPort: true
   }

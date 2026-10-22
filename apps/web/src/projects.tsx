@@ -6,6 +6,7 @@ import { api } from './api'
 import { CreateProjectFeature } from './create-project'
 import { Route } from './routes/workspace'
 import { SessionFeature } from './sessions'
+import { SkillsFeature } from './skills'
 
 export const ProjectWorkspaceFeature = () => {
   const { project } = Route.useSearch()
@@ -100,6 +101,7 @@ export const ProjectWorkspaceFeature = () => {
 }
 
 const ProjectDetail = ({ project }: { project: string }) => {
+  const { view, session } = Route.useSearch()
   const selected = useQuery({
     enabled: Boolean(project),
     queryFn: ({ signal }) => api.projects.get({ params: { id: project ?? '' } }, { signal }),
@@ -127,7 +129,19 @@ const ProjectDetail = ({ project }: { project: string }) => {
           {path}
         </p>
       ))}
-      <SessionFeature project={selected.data} />
+      <nav aria-label="项目页面" className="mt-6 flex gap-4">
+        <Link aria-current={!view ? 'page' : undefined} search={{ project, session }} to="/workspace">
+          会话工作台
+        </Link>
+        <Link
+          aria-current={view === 'skills' ? 'page' : undefined}
+          search={{ project, session, view: 'skills' }}
+          to="/workspace"
+        >
+          技能管理
+        </Link>
+      </nav>
+      {view === 'skills' ? <SkillsFeature projectId={project} /> : <SessionFeature project={selected.data} />}
     </section>
   )
 }

@@ -1,6 +1,6 @@
 // cspell:ignore enui
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { extname, join, resolve } from 'node:path'
@@ -8,7 +8,8 @@ import { Readable } from 'node:stream'
 
 import type { ServerResponse } from 'node:http'
 import { expect as browserExpect, chromium } from '@playwright/test'
-import { parseEvent, RuntimeError } from '@qingshaner/runtime'
+import { ProjectResources, parseEvent, RuntimeError } from '@qingshaner/runtime'
+import { Skills } from '@qingshaner/skill'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import type { Browser, Page } from '@playwright/test'
@@ -86,14 +87,16 @@ beforeAll(async () => {
   browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL, headless: true })
 }, 60000)
 
-const openService = () =>
+const openService = async () =>
   openTestService({
     dataDir: directory,
     defaultModel: 'deployment-model',
     origin,
+    resources: new ProjectResources({ skills: await Skills.open(join(directory, 'managed-skills')) }),
     runtimes: [
       {
         cancel: adapter.cancel.bind(adapter),
+        configureProject: () => Promise.resolve(),
         createSession: adapter.createSession.bind(adapter),
         dispose: adapter.dispose.bind(adapter),
         execute: adapter.execute.bind(adapter),
@@ -869,3 +872,113 @@ test.each([
   },
   30000
 )
+
+describe('skill management through the real service', () => {
+  test('imports managed copies, reads safe files and isolates project bindings', async () => {
+    const source = join(directory, 'source')
+    await mkdir(join(source, 'references'), { recursive: true })
+    await mkdir(join(source, 'scripts'))
+    const content =
+      '---\nname: review-helper\ndescription: Review helper\n---\n<script>window.skillExecuted = true</script>'
+    await writeFile(join(source, 'SKILL.md'), content)
+    await writeFile(join(source, 'references/guide.md'), 'Read the diff before reviewing.')
+    await writeFile(join(source, 'scripts/check.js'), 'throw new Error("Do not execute")')
+    await createProject('Skills Alpha')
+    await page.getByRole('link', { name: '技能管理' }).click()
+    await browserExpect(page.getByText('暂无导入的技能。')).toBeVisible()
+    await page.getByLabel('服务端技能目录').fill(directory)
+    await page.getByRole('button', { exact: true, name: '导入技能' }).click()
+    await browserExpect(page.getByRole('alert').filter({ hasText: '导入失败' })).toBeVisible()
+    await browserExpect(page.getByLabel('服务端技能目录')).toHaveValue(directory)
+    await page.getByLabel('服务端技能目录').fill(source)
+    await page.getByRole('button', { exact: true, name: '导入技能' }).click()
+    await browserExpect(page.getByRole('region', { name: '文件内容 SKILL.md' })).toHaveText(content)
+    expect(await page.evaluate(() => Reflect.get(window, 'skillExecuted'))).toBeUndefined()
+    await writeFile(join(source, 'references/guide.md'), 'Source changed after import')
+    await page.getByLabel('文件相对路径').fill('references/guide.md')
+    await page.getByRole('button', { name: '读取文件' }).click()
+    await browserExpect(page.getByRole('region', { name: '文件内容 references/guide.md' })).toHaveText(
+      'Read the diff before reviewing.'
+    )
+    await page.getByLabel('文件相对路径').fill('scripts/check.js')
+    await page.getByRole('button', { name: '读取文件' }).click()
+    await browserExpect(page.getByRole('region', { name: '文件内容 scripts/check.js' })).toHaveText(
+      'throw new Error("Do not execute")'
+    )
+    await page.getByLabel('文件相对路径').fill('../escape')
+    await page.getByRole('button', { name: '读取文件' }).click()
+    await browserExpect(page.getByRole('alert').filter({ hasText: '文件读取失败' })).toBeVisible()
+    await page.getByRole('button', { name: '绑定并启用' }).click()
+    const binding = page.getByRole('article', { name: '项目技能 review-helper' })
+    await browserExpect(binding.getByText('已启用', { exact: true })).toBeVisible()
+    const alphaUrl = page.url()
+    await page.reload()
+    await browserExpect(binding.getByText('已启用', { exact: true })).toBeVisible()
+    await createProject('Skills Beta')
+    await page.getByRole('link', { name: '技能管理' }).click()
+    await browserExpect(page.getByText('本项目尚未绑定技能。')).toBeVisible()
+    await browserExpect(page.getByRole('article', { name: '共享技能 review-helper' })).toBeVisible()
+    await page.getByRole('button', { name: '绑定并启用' }).click()
+    await browserExpect(binding.getByText('已启用', { exact: true })).toBeVisible()
+    await page.goto(alphaUrl)
+    await binding.getByRole('button', { exact: true, name: '停用' }).click()
+    await browserExpect(binding.getByText('已停用', { exact: true })).toBeVisible()
+    await binding.getByRole('button', { exact: true, name: '启用' }).focus()
+    await page.keyboard.press('Enter')
+    await browserExpect(binding.getByText('已启用', { exact: true })).toBeVisible()
+    await binding.getByRole('button', { name: '解除绑定' }).click()
+    await browserExpect(page.getByText('本项目尚未绑定技能。')).toBeVisible()
+    await page.getByRole('link', { exact: true, name: 'Skills Beta' }).click()
+    await page.getByRole('link', { name: '技能管理' }).click()
+    await browserExpect(binding.getByText('已启用', { exact: true })).toBeVisible()
+    await page.setViewportSize({ height: 844, width: 390 })
+    await page
+      .getByRole('article', { name: '共享技能 review-helper' })
+      .getByRole('button', { name: '查看内容' })
+      .click()
+    await browserExpect(page.getByRole('region', { name: '文件内容 SKILL.md' })).toHaveText(content)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    expect(await readFile(join(source, 'SKILL.md'), 'utf8')).toBe(content)
+    expect(await readFile(join(source, 'scripts/check.js'), 'utf8')).toBe('throw new Error("Do not execute")')
+  }, 30000)
+
+  test('shows pending and failed bindings without reporting them as effective', async () => {
+    const source = join(directory, 'source')
+    await mkdir(source)
+    await writeFile(join(source, 'SKILL.md'), '---\nname: waiting-helper\ndescription: Wait test\n---\nBody')
+    await createProject('Pending Skills')
+    await page.getByRole('link', { name: '技能管理' }).click()
+    await page.getByLabel('服务端技能目录').fill(source)
+    await page.getByRole('button', { exact: true, name: '导入技能' }).click()
+    await browserExpect(page.getByText('技能已导入受管理副本。')).toBeVisible()
+    const gate = Promise.withResolvers<void>()
+    await page.route('**/projects/*/skills/*', async (route) => {
+      await gate.promise
+      await route.abort()
+    })
+    try {
+      await page.getByRole('button', { name: '绑定并启用' }).click()
+      await browserExpect(page.getByRole('status').filter({ hasText: '正在提交技能变更' })).toBeVisible()
+      await browserExpect(page.getByText('本项目尚未绑定技能。')).toBeVisible()
+      await page.getByRole('link', { name: '会话工作台' }).click()
+      await page.getByRole('link', { name: '技能管理' }).click()
+      await browserExpect(page.getByRole('status').filter({ hasText: '正在提交技能变更' })).toBeVisible()
+    } finally {
+      gate.resolve()
+    }
+    await browserExpect(page.getByRole('alert').filter({ hasText: '技能变更失败' })).toBeVisible()
+    await browserExpect(page.getByText('本项目尚未绑定技能。')).toBeVisible()
+    await page.unroute('**/projects/*/skills/*')
+    await page.getByRole('button', { name: '绑定并启用' }).click()
+    await browserExpect(
+      page.getByRole('article', { name: '项目技能 waiting-helper' }).getByText('已启用', { exact: true })
+    ).toBeVisible()
+    await page.route('**/skills', (route) => route.abort())
+    await page.reload()
+    await browserExpect(page.getByRole('alert').filter({ hasText: '技能列表加载失败' })).toBeVisible()
+    await browserExpect(page.getByText('暂无导入的技能。')).toHaveCount(0)
+    await page.unroute('**/skills')
+    await page.getByRole('button', { name: '重试技能列表' }).click()
+    await browserExpect(page.getByRole('article', { name: '共享技能 waiting-helper' })).toBeVisible()
+  }, 30000)
+})

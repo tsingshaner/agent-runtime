@@ -18,6 +18,9 @@ export const queryClient = new QueryClient({
     }
   })
 })
-export const api: RuntimeContractClient = createORPCClient(
-  new OpenAPILink(contract, { origin: window.location.origin })
-)
+const link = new OpenAPILink(contract, { origin: window.location.origin })
+export const api: RuntimeContractClient = createORPCClient(link)
+// oRPC reserves `bind` on recursive clients for Function.prototype.bind.
+export const bindProjectSkill: RuntimeContractClient['projects']['skills']['bind'] = createORPCClient(link, {
+  path: ['projects', 'skills', 'bind']
+})

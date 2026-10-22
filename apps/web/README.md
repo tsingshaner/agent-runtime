@@ -4,7 +4,7 @@ React、Vite、TanStack Router/Query、Base UI 与 Tailwind CSS 构建的中文�
 `src/routes/` 使用 TanStack 文件路由，Vite 插件自动生成 `src/routeTree.gen.ts`；生成文件随代码提交，不手工编辑。
 浏览器使用 Better Auth React client；业务 API 使用共享 oRPC 契约。
 当前入口提供登录、项目与会话导航、Codex 流式聊天、历史和归档、工具审批、补充输入及取消。
-资源管理页面由后续任务实现。
+已提供 Skill 导入、内容读取和项目绑定；MCP、Knowledge 和 Memory 页面由后续任务实现。
 
 ## 构建与启动
 
@@ -35,7 +35,7 @@ RUNTIME_PUBLIC_ORIGIN=http://127.0.0.1:5173 pnpm --filter @internal/server start
 pnpm --filter @internal/web dev
 ```
 
-打开 `http://127.0.0.1:5173`。Vite 将认证、健康检查、项目、会话和运行请求转发到本机 4310，保留浏览器的 Host/Origin。不要将开发服务器公开到公网。
+打开 `http://127.0.0.1:5173`。Vite 将认证、健康检查、项目、会话、运行和技能请求转发到本机 4310，保留浏览器的 Host/Origin。不要将开发服务器公开到公网。
 
 ## 同源 HTTPS
 
@@ -135,3 +135,16 @@ RUN_REAL_CODEX=1 CODEX_MODEL=your-model pnpm --filter @internal/web smoke
 
 浏览器回归覆盖混排、分片、错误回退、终态中断、重连和交互控制。
 真实 Codex smoke 额外请求卡片与表格，验证生成和刷新恢复；未启用仍报告 UNVERIFIED。
+
+## 技能管理
+
+选择项目后打开「技能管理」，页面地址保留 `view=skills`，刷新或登录后可恢复。
+「共享技能库」展示所有已导入的受管理副本，「当前项目绑定」独立展示本项目的启停状态。
+从服务端目录导入会保留原文件及脚本、参考资料；点击「查看内容」读取 SKILL.md，
+也可按相对路径读取附属文件。文件仅作为文本展示，不执行 HTML 或脚本，不提供在线编辑。
+
+绑定、启停和解除绑定会等待服务端确认；有活动 Run 时显示等待提示，可以切回会话处理审批或取消。
+解除绑定不删除共享副本。绑定失败保留服务端状态并提供错误提示，不提前显示为已生效。
+
+浏览器测试使用真实临时目录和服务，覆盖导入失败、文件越界、安全展示、项目隔离、刷新、键盘和窄屏。
+HTTP 资源测试验证活动 Run 期间等待更新且取消仍可用；这些测试不调用真实 Codex。

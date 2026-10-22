@@ -124,3 +124,58 @@ test('manages resources behind authentication, preserves imports and exposes saf
     await rm(dir, { force: true, recursive: true })
   }
 }, 20000)
+
+test('waits for an active run before applying a skill binding and keeps cancellation available', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'http-skill-binding-'))
+  const skills = await Skills.open(join(dir, 'skills'))
+  class Adapter extends ManualAdapter {
+    configureProject = () => Promise.resolve()
+  }
+  const adapter = new Adapter()
+  const server = await openTestService({
+    dataDir: join(dir, 'db'),
+    resources: new ProjectResources({ skills }),
+    runtimes: [adapter]
+  })
+  const request = (path: string, method = 'GET', body?: unknown) =>
+    server.fetch(server.url + path, {
+      headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' },
+      method,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    })
+  try {
+    await request('/projects', 'POST', { id: 'p', name: 'p' })
+    await request('/projects', 'POST', { id: 'other', name: 'other' })
+    await mkdir(join(dir, 'source'))
+    await writeFile(join(dir, 'source/SKILL.md'), '---\nname: waiting\ndescription: test\n---\nBody')
+    const skill = (await (await request('/skills', 'POST', { source: join(dir, 'source') })).json()) as { id: string }
+    const session = (await (
+      await request('/sessions', 'POST', { cwd: dir, model: 'test', projectId: 'p', runtime: 'manual' })
+    ).json()) as { id: string }
+    const run = (await (await request(`/sessions/${session.id}/runs`, 'POST', { text: 'working' })).json()) as {
+      runId: string
+    }
+    await adapter.waitStarted(run.runId)
+    let applied = false
+    const updating = request(`/projects/p/skills/${skill.id}`, 'POST', { enabled: true }).then((response) => {
+      applied = true
+      return response
+    })
+    await expect
+      .poll(
+        async () =>
+          (await (await request(`/sessions/${session.id}/runs`, 'POST', { text: 'blocked' })).json()) as unknown
+      )
+      .toMatchObject({ data: { code: 'RESOURCES_UPDATING' } })
+    expect(applied).toBe(false)
+    expect(await (await request('/projects/p/skills')).json()).toEqual([])
+    expect((await request(`/runs/${run.runId}/cancel`, 'POST', {})).status).toBe(200)
+    expect((await updating).status).toBe(200)
+    expect(await (await request('/projects/p/skills')).json()).toMatchObject([{ enabled: true, id: skill.id }])
+    expect(await (await request('/projects/other/skills')).json()).toEqual([])
+    expect(await readFile(join(dir, 'source/SKILL.md'), 'utf8')).toContain('Body')
+  } finally {
+    await server.close()
+    await rm(dir, { force: true, recursive: true })
+  }
+}, 20000)

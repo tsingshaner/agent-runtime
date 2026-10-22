@@ -10,7 +10,7 @@
     "smoke": "node probe.ts --external"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/dsh": "0.2.0-rc.1",
     "@deepseek-ai/dsh-agent": "0.2.0-rc.1",
     "@deepseek-ai/dsh-llm": "0.2.0-rc.1",

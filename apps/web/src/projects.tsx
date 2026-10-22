@@ -6,6 +6,7 @@ import { api } from './api'
 import { CreateProjectFeature } from './create-project'
 import { KnowledgeFeature } from './knowledge'
 import { McpFeature } from './mcp'
+import { MemoryFeature } from './memory'
 import { Route } from './routes/workspace'
 import { SessionFeature } from './sessions'
 import { SkillsFeature } from './skills'
@@ -156,16 +157,15 @@ const ProjectDetail = ({ project }: { project: string }) => {
         >
           知识管理
         </Link>
+        <Link
+          aria-current={view === 'memory' ? 'page' : undefined}
+          search={{ project, session, view: 'memory' }}
+          to="/workspace"
+        >
+          记忆管理
+        </Link>
       </nav>
-      {view === 'skills' ? (
-        <SkillsFeature projectId={project} />
-      ) : view === 'mcp' ? (
-        <McpFeature projectId={project} />
-      ) : view === 'knowledge' ? (
-        <KnowledgeFeature key={project} projectId={project} />
-      ) : (
-        <SessionFeature project={selected.data} />
-      )}
+      {view ? <ProjectResourcesView projectId={project} view={view} /> : <SessionFeature project={selected.data} />}
     </section>
   )
 }
@@ -220,4 +220,15 @@ const SessionNavigation = ({ projectId, onSelect }: { projectId: string; onSelec
       )}
     </nav>
   )
+}
+
+const ProjectResourcesView = ({
+  view,
+  projectId
+}: {
+  view: 'skills' | 'mcp' | 'knowledge' | 'memory'
+  projectId: string
+}) => {
+  const Feature = { knowledge: KnowledgeFeature, mcp: McpFeature, memory: MemoryFeature, skills: SkillsFeature }[view]
+  return <Feature key={projectId} projectId={projectId} />
 }

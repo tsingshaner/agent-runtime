@@ -10,6 +10,7 @@ import type { ServerResponse } from 'node:http'
 import { expect as browserExpect, chromium } from '@playwright/test'
 import { Knowledge } from '@qingshaner/knowledge'
 import { Mcp } from '@qingshaner/mcp'
+import { ProjectMemory } from '@qingshaner/memory'
 import { ProjectResources, parseEvent, RuntimeError } from '@qingshaner/runtime'
 import { Skills } from '@qingshaner/skill'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
@@ -20,6 +21,7 @@ import { createMcpHttpPeer } from '../../../packages/mcp/test/http.fixture'
 import { SessionStore } from '../../../packages/runtime/src/store'
 import { ManualAdapter } from '../../../packages/runtime/test/manual-adapter'
 import { openTestService } from '../../server/test/service.fixture'
+import { createMemoryPeer } from './memory.fixture'
 
 let browser: Browser
 let page: Page
@@ -91,10 +93,11 @@ beforeAll(async () => {
   browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL, headless: true })
 }, 60000)
 
-const openService = async () =>
+const openService = async (memory?: ProjectMemory) =>
   openTestService({
     dataDir: directory,
     defaultModel: 'deployment-model',
+    memory,
     origin,
     resources: new ProjectResources({
       knowledge: await Knowledge.open(join(directory, 'knowledge')),
@@ -1282,5 +1285,182 @@ describe('Knowledge management through the real service', () => {
     await page.getByRole('button', { name: '取消运行' }).click()
     await page.getByRole('link', { name: '知识管理' }).click()
     await browserExpect(page.getByText('知识目录中暂无 Markdown 文档。')).toBeVisible()
+  }, 30000)
+})
+
+describe('Memory management through the real service', () => {
+  const request = (path: string, method = 'GET', body?: unknown) =>
+    service.fetch(`${origin}${path}`, {
+      headers: { authorization: `Bearer ${service.token}`, 'content-type': 'application/json' },
+      method,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    })
+  const configure = async (endpoint: string) => {
+    await service.close()
+    adapter = new ManualAdapter()
+    process.env.WEB_MEMORY_KEY = 'private-memory-secret'
+    service = await openService(
+      new ProjectMemory({ apiKeyEnv: 'WEB_MEMORY_KEY', endpoint, serviceId: 'web-test', timeoutMs: 500 })
+    )
+    await page.goto(`${origin}/login`)
+    await page.getByLabel('访问令牌').fill(service.token)
+    await page.getByRole('button', { name: '进入工作台' }).click()
+  }
+  const succeed = async (projectId: string) => {
+    const session = (await (
+      await request('/sessions', 'POST', { cwd: directory, model: 'test', projectId, runtime: 'codex' })
+    ).json()) as { id: string }
+    const run = (await (
+      await request(`/sessions/${session.id}/runs`, 'POST', { text: 'new conversation' })
+    ).json()) as { runId: string }
+    await adapter.waitStarted(run.runId)
+    adapter.finish(run.runId, { finalReply: 'successful answer', status: 'succeeded' })
+    await expect.poll(async () => (await (await request(`/runs/${run.runId}`)).json()).status).toBe('succeeded')
+    return { runId: run.runId, sessionId: session.id }
+  }
+
+  test('distinguishes missing configuration from empty memory and preserves independent write queries', async () => {
+    await createProject('No Memory')
+    await page.getByRole('link', { name: '记忆管理' }).click()
+    await browserExpect(page.getByRole('alert')).toContainText('Memory 未配置')
+    await browserExpect(page.getByText('当前页暂无记忆。')).toHaveCount(0)
+    await browserExpect(page.getByText('本项目暂无写入记录。')).toBeVisible()
+    await browserExpect(page.getByRole('button', { name: /安装|启动|创建记忆|编辑记忆/ })).toHaveCount(0)
+  })
+
+  test('shows durable pending writes without pretending they were accepted or replaying them', async () => {
+    await createProject('Pending Memory')
+    await createSession('Pending write source')
+    const params = new URL(page.url()).searchParams
+    const projectId = params.get('project')!
+    const sessionId = params.get('session')!
+    await service.close()
+    const store = await SessionStore.open(directory)
+    try {
+      await store.beginRun(sessionId, 'pending-memory-run', { text: 'saved input' })
+      await store.finishRun(
+        'pending-memory-run',
+        { status: 'succeeded' },
+        {
+          assistant: 'saved answer',
+          error: null,
+          projectId,
+          runId: 'pending-memory-run',
+          sessionId,
+          status: 'pending',
+          user: 'saved input'
+        }
+      )
+    } finally {
+      await store.close()
+    }
+    adapter = new ManualAdapter()
+    service = await openService()
+    await page.goto(`${origin}/login`)
+    await page.getByLabel('访问令牌').fill(service.token)
+    await page.getByRole('button', { name: '进入工作台' }).click()
+    await page.goto(`${origin}/workspace?project=${projectId}&view=memory`)
+    await browserExpect(page.getByRole('article', { exact: true, name: '写入 pending-memory-run' })).toContainText(
+      '等待写入'
+    )
+    expect(adapter.executions.size).toBe(0)
+    await browserExpect(page.getByRole('button', { name: /补写|重试写入/ })).toHaveCount(0)
+  })
+
+  test('queries, searches and deletes scoped records without deleting session history', async () => {
+    const peer = await createMemoryPeer()
+    try {
+      await configure(peer.endpoint)
+      await createProject('Memory Alpha')
+      const projectId = new URL(page.url()).searchParams.get('project')!
+      peer.entries.set(
+        projectId,
+        Array.from({ length: 21 }, (_, index) => ({
+          background: 'session source',
+          content: `note ${index} <script>alert(1)</script>`,
+          created_at: '2026-10-22',
+          id: `memory-${index}`,
+          type: 'fact',
+          updated_at: '2026-10-22'
+        }))
+      )
+      const run = await succeed(projectId)
+      await page.getByRole('link', { name: '记忆管理' }).click()
+      await browserExpect(page.getByRole('article', { exact: true, name: '记忆 memory-0' })).toContainText(
+        'session source'
+      )
+      expect(await page.getByRole('region', { name: '记忆记录' }).locator('script').count()).toBe(0)
+      await page.getByRole('button', { name: '下一页记忆' }).click()
+      await browserExpect(page.getByRole('article', { exact: true, name: '记忆 memory-20' })).toBeVisible()
+      await page.getByLabel('记忆关键词').fill('note 0')
+      await page.getByRole('button', { exact: true, name: '搜索记忆' }).focus()
+      await page.keyboard.press('Enter')
+      const record = page.getByRole('article', { exact: true, name: '记忆 memory-0' })
+      await browserExpect(record).toBeVisible()
+      await page.route('**/projects/*/memory', (route) =>
+        route.request().method() === 'DELETE' ? route.abort() : route.continue()
+      )
+      page.once('dialog', (dialog) => dialog.accept())
+      await record.getByRole('button', { name: '删除记忆' }).click()
+      await browserExpect(page.getByRole('alert')).toContainText('删除未确认')
+      await browserExpect(record).toBeVisible()
+      await page.unroute('**/projects/*/memory')
+      page.once('dialog', (dialog) => dialog.accept())
+      await record.getByRole('button', { name: '删除记忆' }).click()
+      await browserExpect(page.getByText('没有匹配的记忆。')).toBeVisible()
+      expect((await request(`/sessions/${run.sessionId}`)).status).toBe(200)
+      expect(await (await request(`/runs/${run.runId}`)).json()).toMatchObject({ status: 'succeeded' })
+      await browserExpect(page.getByRole('article', { exact: true, name: `写入 ${run.runId}` })).toContainText('已接受')
+      await createProject('Memory Beta')
+      await page.getByRole('link', { name: '记忆管理' }).click()
+      await browserExpect(page.getByText('当前页暂无记忆。')).toBeVisible()
+      await browserExpect(page.getByText('本项目暂无写入记录。')).toBeVisible()
+      peer.fail(true)
+      await page.getByRole('button', { exact: true, name: '刷新记忆' }).click()
+      await browserExpect(page.getByRole('alert')).toContainText('Memory 服务不可用')
+      await browserExpect(page.getByText('当前页暂无记忆。')).toHaveCount(0)
+      expect(await page.locator('body').innerText()).not.toContain('private-service-secret')
+      peer.fail(false)
+      await page.setViewportSize({ height: 844, width: 390 })
+      await page.getByLabel('记忆关键词').fill('nothing')
+      await page.getByRole('button', { exact: true, name: '搜索记忆' }).click()
+      await browserExpect(page.getByText('没有匹配的记忆。')).toBeVisible()
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    } finally {
+      delete process.env.WEB_MEMORY_KEY
+      await peer.close()
+    }
+  }, 30000)
+
+  test('shows failed and uncertain writes independently from successful runs without retrying', async () => {
+    const peer = await createMemoryPeer()
+    try {
+      await configure(peer.endpoint)
+      await createProject('Memory Writes')
+      const projectId = new URL(page.url()).searchParams.get('project')!
+      delete process.env.WEB_MEMORY_KEY
+      const failed = await succeed(projectId)
+      await page.getByRole('link', { name: '记忆管理' }).click()
+      await browserExpect(page.getByRole('alert')).toContainText('服务端凭据不可用')
+      const failedRecord = page.getByRole('article', { exact: true, name: `写入 ${failed.runId}` })
+      await browserExpect(failedRecord).toContainText('写入失败')
+      await browserExpect(failedRecord).toContainText('MEMORY_WRITE_FAILED')
+      process.env.WEB_MEMORY_KEY = 'private-memory-secret'
+      peer.loseReceipt()
+      const unknown = await succeed(projectId)
+      await page.getByRole('button', { name: '刷新写入状态' }).click()
+      const unknownRecord = page.getByRole('article', { exact: true, name: `写入 ${unknown.runId}` })
+      await browserExpect(unknownRecord).toContainText('结果未知')
+      await browserExpect(unknownRecord).toContainText('MEMORY_WRITE_UNCERTAIN')
+      await page.reload()
+      await browserExpect(unknownRecord).toContainText('结果未知')
+      expect(peer.writes).toEqual([projectId])
+      expect(await (await request(`/runs/${failed.runId}`)).json()).toMatchObject({ status: 'succeeded' })
+      expect(await (await request(`/runs/${unknown.runId}`)).json()).toMatchObject({ status: 'succeeded' })
+      expect(await page.locator('body').innerText()).not.toContain('private-memory-secret')
+    } finally {
+      delete process.env.WEB_MEMORY_KEY
+      await peer.close()
+    }
   }, 30000)
 })

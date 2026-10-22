@@ -45,6 +45,10 @@
     },
     "packages/shared": {
       "ignoreDependencies": ["es-toolkit"]
+    },
+    "packages/ui": {
+      "entry": ["src/components/*/index.tsx", "src/lib/*.ts", "src/styles.css"],
+      "project": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.css"]
     }
   }
 }

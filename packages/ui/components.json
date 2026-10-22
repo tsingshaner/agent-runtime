@@ -1,0 +1,27 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "aliases": {
+    "components": "#components",
+    "hooks": "#hooks",
+    "lib": "#lib",
+    "ui": "#components",
+    "utils": "#lib/utils"
+  },
+  "iconLibrary": "lucide",
+  "menuAccent": "subtle",
+  "menuColor": "default",
+  "registries": {
+    "@ui": "https://tsingshaner.github.io/shadcn-design-token/r/{name}.json"
+  },
+  "rsc": false,
+  "rtl": false,
+  "style": "base-nova",
+  "tailwind": {
+    "baseColor": "neutral",
+    "config": "",
+    "css": "src/styles.css",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "tsx": true
+}

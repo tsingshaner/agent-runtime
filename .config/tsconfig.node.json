@@ -1,21 +1,9 @@
 {
   "compilerOptions": {
     "lib": ["ESNext"],
-    "paths": {
-      "@internal/shared": ["../packages/shared/src/index.ts"],
-      "@internal/shared/files": ["../packages/shared/src/files.ts"],
-      "@qingshaner/knowledge": ["../packages/knowledge/src/index.ts"],
-      "@qingshaner/mcp": ["../packages/mcp/src/index.ts"],
-      "@qingshaner/runtime": ["../packages/runtime/src/index.ts"],
-      "@qingshaner/runtime-codex": ["../packages/runtime-codex/src/index.ts"],
-      "@qingshaner/runtime-deepagents": ["../packages/runtime-deepagents/src/index.ts"],
-      "@qingshaner/runtime-dsh": ["../packages/runtime-dsh/src/index.ts"],
-      "@qingshaner/skill": ["../packages/skill/src/index.ts"]
-    },
-    "rootDir": "..",
     "target": "ESNext",
     "types": ["node"]
   },
-  "extends": "@qingshaner/devtools/tsconfig/base.json",
+  "extends": "./tsconfig.base.json",
   "include": ["../*.config.ts"]
 }

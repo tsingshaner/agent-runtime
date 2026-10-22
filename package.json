@@ -24,7 +24,7 @@
     "check": "biome check .",
     "check:fix": "biome check . --write",
     "check:cspell": "cspell . --no-summary --no-progress --gitignore",
-    "check:type": "tsc --noEmit -p .config/tsconfig.app.json && tsc --noEmit -p .config/tsconfig.node.json && pnpm --filter @internal/web check:type",
+    "check:type": "tsc --noEmit -p .config/tsconfig.app.json && tsc --noEmit -p .config/tsconfig.node.json && pnpm --filter @internal/web check:type && tsc --noEmit -p packages/ui/tsconfig.json",
     "check:knip": "knip",
     "prepare": "simple-git-hooks",
     "test": "vitest run",
@@ -33,19 +33,19 @@
     "smoke:codex": "pnpm --filter @internal/sdk-example smoke"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.14",
+    "@biomejs/biome": "2.5.14",
     "@changesets/cli": "^3.0.3",
     "@qingshaner/devtools": "^0.0.3",
-    "@types/node": "^26.6.3",
-    "@vitest/coverage-v8": "^5.0.2",
-    "cspell": "^10.3.5",
+    "@types/node": "^26.6.5",
+    "@vitest/coverage-v8": "^5.0.5",
+    "cspell": "^10.4.0",
     "drizzle-kit": "catalog:",
-    "knip": "^6.38.0",
+    "knip": "^6.42.1",
     "nano-staged": "^1.0.2",
     "simple-git-hooks": "^2.14.0",
-    "tsdown": "^0.23.0",
+    "tsdown": "^0.23.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.5"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm nano-staged",

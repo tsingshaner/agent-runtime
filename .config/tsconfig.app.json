@@ -3,25 +3,15 @@
     "allowImportingTsExtensions": true,
     "lib": ["ESNext"],
     "noEmit": true,
-    "paths": {
-      "@internal/shared": ["../packages/shared/src/index.ts"],
-      "@internal/shared/files": ["../packages/shared/src/files.ts"],
-      "@qingshaner/knowledge": ["../packages/knowledge/src/index.ts"],
-      "@qingshaner/mcp": ["../packages/mcp/src/index.ts"],
-      "@qingshaner/memory": ["../packages/memory/src/index.ts"],
-      "@qingshaner/runtime": ["../packages/runtime/src/index.ts"],
-      "@qingshaner/runtime-codex": ["../packages/runtime-codex/src/index.ts"],
-      "@qingshaner/runtime-contract": ["../packages/contract/src/index.ts"],
-      "@qingshaner/runtime-deepagents": ["../packages/runtime-deepagents/src/index.ts"],
-      "@qingshaner/runtime-dsh": ["../packages/runtime-dsh/src/index.ts"],
-      "@qingshaner/skill": ["../packages/skill/src/index.ts"]
-    },
-    "resolveJsonModule": true,
-    "rootDir": "..",
     "target": "ESNext",
     "types": ["node"]
   },
-  "exclude": ["../apps/web"],
-  "extends": "@qingshaner/devtools/tsconfig/base.json",
-  "include": ["../packages/**/*.ts", "../examples/**/*.ts", "../apps/**/*.ts"]
+  "exclude": ["../apps/web", "../packages/ui"],
+  "extends": ["./tsconfig.base.json"],
+  "include": [
+    "../packages/**/*.ts",
+    "../packages/**/*.tsx",
+    "../examples/**/*.ts",
+    "../apps/**/*.ts"
+  ]
 }

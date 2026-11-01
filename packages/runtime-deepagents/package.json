@@ -15,7 +15,7 @@
     "@modelcontextprotocol/sdk": "catalog:",
     "@qingshaner/runtime": "workspace:*",
     "deepagents": "1.13.5",
-    "langchain": "1.5.11",
+    "langchain": "1.6.0",
     "zod": "catalog:"
   },
   "description": "Deep Agents runtime with persistent native checkpoints",
